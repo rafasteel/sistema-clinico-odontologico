@@ -3,14 +3,15 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
+    AlertTriangle,
     ArrowRight,
     BadgeDollarSign,
     CalendarClock,
     CheckCircle2,
-    Clock3,
     LayoutDashboard,
     Package,
     Plus,
+    RefreshCcw,
     Stethoscope,
     Users,
     WalletCards,
@@ -21,6 +22,28 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    listarCitasSupabase,
+    type CitaSupabase,
+    type EstadoCitaSupabase,
+} from "@/lib/supabase/citas";
+import {
+    listarCuentasCobrarSupabase,
+    listarVentasSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    listarPacientesSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
+import {
+    listarProductosInventarioSupabase,
+    type ProductoInventarioSupabase,
+} from "@/lib/supabase/inventario";
 
 type UsuarioSesion = {
     usuario: string;
@@ -28,16 +51,7 @@ type UsuarioSesion = {
     rol: string;
 };
 
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cobrada"
-    | "Reagendada"
-    | "Cancelada"
-    | "No asistió";
+type EstadoCita = EstadoCitaSupabase;
 
 type Cita = {
     id: string;
@@ -57,7 +71,7 @@ type Paciente = {
     estado: "Activo" | "Inactivo";
 };
 
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
+type EstadoVenta = EstadoVentaSupabase;
 
 type Venta = {
     id: string;
@@ -76,7 +90,7 @@ type Producto = {
     estado: "Activo" | "Inactivo";
 };
 
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
+type EstadoCuenta = EstadoCuentaCobrarSupabase;
 
 type CuentaPorCobrar = {
     id: string;
@@ -93,24 +107,66 @@ function fechaHoyLocal() {
     return `${year}-${month}-${day}`;
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
 function formatoMoneda(valor: number, simbolo = "C$") {
     return `${simbolo} ${(valor || 0).toLocaleString("es-NI", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     })}`;
+}
+
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
+}
+
+function convertirCita(cita: CitaSupabase): Cita {
+    return {
+        id: cita.id,
+        pacienteNombre: cita.paciente_nombre || "",
+        doctorNombre: cita.doctor_nombre || "",
+        servicioNombre: cita.servicio_nombre || "",
+        costo: Number(cita.costo || 0),
+        fecha: cita.fecha,
+        hora: horaCorta(cita.hora),
+        estado: cita.estado || "Programada",
+        observaciones: cita.observaciones || "",
+    };
+}
+
+function convertirPaciente(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        estado: paciente.estado || "Activo",
+    };
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha,
+        efectivo: Number(venta.efectivo || 0),
+        tarjeta: Number(venta.tarjeta || 0),
+        transferencia: Number(venta.transferencia || 0),
+        estado: venta.estado || "Pagada",
+    };
+}
+
+function convertirProducto(producto: ProductoInventarioSupabase): Producto {
+    return {
+        id: producto.id,
+        nombre: producto.nombre || "",
+        stock: Number(producto.stock || 0),
+        stockMinimo: Number(producto.stock_minimo || 0),
+        estado: producto.estado || "Activo",
+    };
+}
+
+function convertirCuentaCobrar(cuenta: CuentaCobrarSupabase): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        saldo: Number(cuenta.saldo || 0),
+        estado: cuenta.estado || "Pendiente",
+    };
 }
 
 function colorEstadoCita(estado: EstadoCita) {
@@ -140,25 +196,64 @@ export default function InicioPage() {
     const [ventas, setVentas] = useState<Venta[]>([]);
     const [productos, setProductos] = useState<Producto[]>([]);
     const [cuentasCobrar, setCuentasCobrar] = useState<CuentaPorCobrar[]>([]);
-
-    useEffect(() => {
-        setUsuario(
-            leerLocalStorage<UsuarioSesion | null>("usuario_sistema_clinico", null)
-        );
-        setConfiguracion(obtenerConfiguracionClinica());
-        setCitas(leerLocalStorage<Cita[]>("citas_sistema_clinico", []));
-        setPacientes(leerLocalStorage<Paciente[]>("pacientes_sistema_clinico", []));
-        setVentas(leerLocalStorage<Venta[]>("ventas_sistema_clinico", []));
-        setProductos(leerLocalStorage<Producto[]>("productos_sistema_clinico", []));
-        setCuentasCobrar(
-            leerLocalStorage<CuentaPorCobrar[]>(
-                "cuentas_cobrar_sistema_clinico",
-                []
-            )
-        );
-    }, []);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
 
     const hoy = fechaHoyLocal();
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+
+            if (usuarioGuardado) {
+                setUsuario(JSON.parse(usuarioGuardado) as UsuarioSesion);
+            }
+
+            try {
+                const configuracionSupabase =
+                    await obtenerConfiguracionClinicaSupabase();
+                setConfiguracion(configuracionSupabase);
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const [
+                citasSupabase,
+                pacientesSupabase,
+                ventasSupabase,
+                productosSupabase,
+                cuentasCobrarSupabase,
+            ] = await Promise.all([
+                listarCitasSupabase(hoy, hoy),
+                listarPacientesSupabase(),
+                listarVentasSupabase(hoy, hoy),
+                listarProductosInventarioSupabase(),
+                listarCuentasCobrarSupabase(),
+            ]);
+
+            setCitas(citasSupabase.map(convertirCita));
+            setPacientes(pacientesSupabase.map(convertirPaciente));
+            setVentas(ventasSupabase.map(convertirVenta));
+            setProductos(productosSupabase.map(convertirProducto));
+            setCuentasCobrar(cuentasCobrarSupabase.map(convertirCuentaCobrar));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el inicio desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
+
+    useEffect(() => {
+        cargarDatos();
+    }, []);
 
     const citasHoy = useMemo(() => {
         return citas
@@ -209,6 +304,43 @@ export default function InicioPage() {
             descripcion="Resumen rápido del día y accesos principales"
             moduloActivo="Inicio"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar Inicio
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Inicio conectado a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Citas, ventas, pacientes, inventario y cuentas por cobrar se leen desde la base de datos.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar"}
+                </button>
+            </section>
+
             <section className="overflow-hidden rounded-3xl bg-slate-900 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
                 <div className="grid gap-6 lg:grid-cols-[1fr_320px] lg:items-center">
                     <div>
@@ -386,10 +518,12 @@ export default function InicioPage() {
                                 <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
                                     <CalendarClock className="mx-auto h-10 w-10 text-slate-300" />
                                     <h4 className="mt-3 text-sm font-black text-slate-700">
-                                        No hay citas para hoy
+                                        {cargando ? "Cargando citas..." : "No hay citas para hoy"}
                                     </h4>
                                     <p className="mt-1 text-xs text-slate-400">
-                                        Podés crear una cita desde Agenda Médica.
+                                        {cargando
+                                            ? "Consultando agenda desde Supabase."
+                                            : "Podés crear una cita desde Agenda Médica."}
                                     </p>
                                 </div>
                             )}
