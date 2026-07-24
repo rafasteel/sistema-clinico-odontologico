@@ -24,6 +24,20 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import {
+    listarAbonosCuentaSupabase,
+    listarCuentasCobrarSupabase,
+    listarVentasSupabase,
+    type AbonoCuentaSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    listarPacientesSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
 
 type Paciente = {
     id: string;
@@ -41,9 +55,9 @@ type Paciente = {
     ultimaCita: string;
 };
 
-type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia";
+type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia" | "Mixto";
 
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
+type EstadoCuenta = EstadoCuentaCobrarSupabase;
 
 type AbonoCuenta = {
     id: string;
@@ -69,7 +83,7 @@ type CuentaPorCobrar = {
     abonos?: AbonoCuenta[];
 };
 
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
+type EstadoVenta = EstadoVentaSupabase;
 
 type Venta = {
     id: string;
@@ -97,10 +111,6 @@ type CuentaNormalizada = CuentaPorCobrar & {
     abonado: number;
 };
 
-const CUENTAS_KEY = "cuentas_cobrar_sistema_clinico";
-const VENTAS_KEY = "ventas_sistema_clinico";
-const PACIENTES_KEY = "pacientes_sistema_clinico";
-
 function fechaHoyLocal() {
     const fecha = new Date();
     const year = fecha.getFullYear();
@@ -112,19 +122,6 @@ function fechaHoyLocal() {
 
 function mesActualLocal() {
     return fechaHoyLocal().slice(0, 7);
-}
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
 }
 
 function numero(valor: unknown) {
@@ -151,8 +148,8 @@ function fechaLegible(fecha: string) {
     return `${partes[2]}/${partes[1]}/${partes[0]}`;
 }
 
-function normalizarTexto(texto: string) {
-    return texto
+function normalizarTexto(texto: unknown) {
+    return String(texto || "")
         .toLowerCase()
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "");
@@ -233,6 +230,87 @@ function descargarCSV(nombreArchivo: string, filas: string[][]) {
     URL.revokeObjectURL(url);
 }
 
+function metodoPago(valor: string): MetodoPago {
+    if (valor === "Efectivo") return "Efectivo";
+    if (valor === "Tarjeta") return "Tarjeta";
+    if (valor === "Transferencia") return "Transferencia";
+
+    return "Mixto";
+}
+
+function convertirAbono(abono: AbonoCuentaSupabase): AbonoCuenta {
+    return {
+        id: abono.id,
+        fecha: abono.fecha,
+        hora: String(abono.hora || "").slice(0, 5),
+        monto: Number(abono.monto || 0),
+        metodo: metodoPago(abono.metodo),
+        observaciones: abono.observaciones || "",
+        usuarioNombre: abono.usuario_nombre || "",
+    };
+}
+
+function convertirCuenta(
+    cuenta: CuentaCobrarSupabase,
+    abonos: AbonoCuenta[]
+): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+        abonos,
+    };
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha,
+        hora: String(venta.hora || "").slice(0, 5),
+        tipoCobro: venta.tipo_cobro || "Venta",
+        citaId: venta.cita_id || "",
+        pacienteId: venta.paciente_id || "",
+        clienteNombre: venta.cliente_nombre || "",
+        concepto: venta.concepto || "",
+        total: Number(venta.total || 0),
+        efectivo: Number(venta.efectivo || 0),
+        tarjeta: Number(venta.tarjeta || 0),
+        transferencia: Number(venta.transferencia || 0),
+        credito: Number(venta.credito || 0),
+        estado: venta.estado || "Pagada",
+        usuarioNombre: venta.usuario_nombre || "",
+        observaciones: venta.observaciones || "",
+    };
+}
+
+function convertirPaciente(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "",
+        enfermedades:
+            paciente.enfermedades_sistemicas ||
+            paciente.antecedentes ||
+            "",
+        medicamentos: paciente.medicamentos_actuales || "",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
+}
+
 export default function ReporteCreditosPage() {
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
         CONFIGURACION_PREDETERMINADA
@@ -245,22 +323,59 @@ export default function ReporteCreditosPage() {
     const [estadoFiltro, setEstadoFiltro] = useState<"Todos" | EstadoCuenta>(
         "Todos"
     );
-    const [mesFiltro, setMesFiltro] = useState("");
+    const [mesFiltro, setMesFiltro] = useState(mesActualLocal());
     const [soloConSaldo, setSoloConSaldo] = useState(true);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            setConfiguracion(obtenerConfiguracionClinica());
+
+            const [cuentasSupabase, ventasSupabase, pacientesSupabase] =
+                await Promise.all([
+                    listarCuentasCobrarSupabase(),
+                    listarVentasSupabase(),
+                    listarPacientesSupabase(),
+                ]);
+
+            const cuentasConAbonos = await Promise.all(
+                cuentasSupabase.map(async (cuenta) => {
+                    const abonosSupabase = await listarAbonosCuentaSupabase(cuenta.id);
+
+                    return convertirCuenta(
+                        cuenta,
+                        abonosSupabase
+                            .filter((abono) => abono.estado !== "Anulado")
+                            .map(convertirAbono)
+                    );
+                })
+            );
+
+            setCuentas(cuentasConAbonos);
+            setVentas(ventasSupabase.map(convertirVenta));
+            setPacientes(pacientesSupabase.map(convertirPaciente));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el reporte de créditos desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        setConfiguracion(obtenerConfiguracionClinica());
-        setCuentas(leerLocalStorage<CuentaPorCobrar[]>(CUENTAS_KEY, []));
-        setVentas(leerLocalStorage<Venta[]>(VENTAS_KEY, []));
-        setPacientes(leerLocalStorage<Paciente[]>(PACIENTES_KEY, []));
-        setMesFiltro(mesActualLocal());
+        cargarDatos();
     }, []);
 
     function recargarDatos() {
-        setConfiguracion(obtenerConfiguracionClinica());
-        setCuentas(leerLocalStorage<CuentaPorCobrar[]>(CUENTAS_KEY, []));
-        setVentas(leerLocalStorage<Venta[]>(VENTAS_KEY, []));
-        setPacientes(leerLocalStorage<Paciente[]>(PACIENTES_KEY, []));
+        cargarDatos();
     }
 
     const cuentasNormalizadas = useMemo<CuentaNormalizada[]>(() => {
@@ -497,22 +612,58 @@ export default function ReporteCreditosPage() {
             descripcion="Análisis de saldos pendientes, vencimientos y recuperación de cartera"
             moduloActivo="Reporte de Créditos"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar el reporte
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 rounded-2xl border border-white bg-white/80 p-4 shadow-sm">
+                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                        <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                            Reporte conectado a Supabase
+                        </p>
+                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                            Cuentas por cobrar, ventas, abonos y pacientes se leen desde la base de datos.
+                        </p>
+                    </div>
+
+                    {cargando && (
+                        <span className="rounded-full bg-teal-50 px-3 py-2 text-[11px] font-black text-teal-700">
+                            Cargando datos...
+                        </span>
+                    )}
+                </div>
+            </section>
+
             <section className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
                     <h2 className="text-2xl font-black text-slate-900">
                         Reporte de créditos
                     </h2>
                     <p className="mt-1 text-sm text-slate-500">
-                        Analiza cuentas por cobrar, cartera vencida y recuperación de pagos.
+                        Analiza cuentas por cobrar, cartera vencida y recuperación de pagos desde Supabase.
                     </p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
                     <button
                         onClick={recargarDatos}
-                        className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                        disabled={cargando}
+                        className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                        <RefreshCcw className="h-4 w-4" />
+                        <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
                         Recargar
                     </button>
 
@@ -973,7 +1124,9 @@ export default function ReporteCreditosPage() {
                                             Sin resultados
                                         </h4>
                                         <p className="mt-1 text-xs text-slate-400">
-                                            No hay créditos que coincidan con los filtros actuales.
+                                            {cargando
+                                                ? "Cargando créditos desde Supabase..."
+                                                : "No hay créditos que coincidan con los filtros actuales."}
                                         </p>
                                     </div>
                                 )}

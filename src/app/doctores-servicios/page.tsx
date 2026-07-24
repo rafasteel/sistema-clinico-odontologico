@@ -11,6 +11,7 @@ import {
     Mail,
     Phone,
     Plus,
+    RefreshCcw,
     Search,
     ShieldAlert,
     Sparkles,
@@ -18,15 +19,27 @@ import {
     Trash2,
     UserRound,
     Users,
-    WalletCards,
     X,
 } from "lucide-react";
 import AppShell from "@/components/AppShell";
+import {
+    actualizarDoctorSupabase,
+    actualizarServicioSupabase,
+    cambiarEstadoDoctorSupabase,
+    cambiarEstadoServicioSupabase,
+    crearDoctorSupabase,
+    crearServicioSupabase,
+    listarDoctoresSupabase,
+    listarServiciosSupabase,
+    type DoctorSupabase,
+    type EstadoRegistroClinico,
+    type ServicioSupabase,
+} from "@/lib/supabase/doctoresServicios";
 
 type UsuarioSistema = {
     usuario: string;
     nombre: string;
-    rol: "ADMIN" | "DOCTOR" | "RECEPCION" | "CAJA";
+    rol: "SUPER_ADMIN" | "ADMIN" | "DOCTOR" | "RECEPCION" | "CAJA";
 };
 
 type Doctor = {
@@ -36,7 +49,7 @@ type Doctor = {
     telefono: string;
     correo: string;
     horario: string;
-    estado: "Activo" | "Inactivo";
+    estado: EstadoRegistroClinico;
 };
 
 type Servicio = {
@@ -46,7 +59,7 @@ type Servicio = {
     duracionMinutos: number;
     precio: number;
     descripcion: string;
-    estado: "Activo" | "Inactivo";
+    estado: EstadoRegistroClinico;
 };
 
 type FormularioDoctor = {
@@ -68,69 +81,7 @@ type FormularioServicio = {
 type VistaActiva = "Doctores" | "Servicios";
 type ModalActivo = "doctor" | "servicio" | null;
 
-const DOCTORES_KEY = "doctores_sistema_clinico";
-const SERVICIOS_KEY = "servicios_sistema_clinico";
 const USUARIO_KEY = "usuario_sistema_clinico";
-
-const doctoresIniciales: Doctor[] = [
-    {
-        id: "1",
-        nombre: "Dra. Ana Martínez",
-        especialidad: "Odontología general",
-        telefono: "8888-0001",
-        correo: "ana@clinica.com",
-        horario: "Lunes a viernes 8:00 AM - 5:00 PM",
-        estado: "Activo",
-    },
-    {
-        id: "2",
-        nombre: "Dr. Luis Ramírez",
-        especialidad: "Endodoncia",
-        telefono: "8888-0002",
-        correo: "luis@clinica.com",
-        horario: "Martes y jueves 9:00 AM - 4:00 PM",
-        estado: "Activo",
-    },
-];
-
-const serviciosIniciales: Servicio[] = [
-    {
-        id: "1",
-        nombre: "Limpieza dental",
-        categoria: "Prevención",
-        duracionMinutos: 45,
-        precio: 1200,
-        descripcion: "Profilaxis dental básica.",
-        estado: "Activo",
-    },
-    {
-        id: "2",
-        nombre: "Extracción dental",
-        categoria: "Cirugía",
-        duracionMinutos: 60,
-        precio: 2500,
-        descripcion: "Extracción dental simple.",
-        estado: "Activo",
-    },
-    {
-        id: "3",
-        nombre: "Restauración con resina",
-        categoria: "Operatoria",
-        duracionMinutos: 50,
-        precio: 1800,
-        descripcion: "Restauración estética con resina.",
-        estado: "Activo",
-    },
-    {
-        id: "4",
-        nombre: "Endodoncia",
-        categoria: "Endodoncia",
-        duracionMinutos: 90,
-        precio: 6500,
-        descripcion: "Tratamiento de conducto.",
-        estado: "Activo",
-    },
-];
 
 const formularioDoctorVacio: FormularioDoctor = {
     nombre: "",
@@ -160,12 +111,6 @@ function leerLocalStorage<T>(clave: string, valorInicial: T): T {
     } catch {
         return valorInicial;
     }
-}
-
-function guardarLocalStorage<T>(clave: string, valor: T) {
-    if (typeof window === "undefined") return;
-
-    localStorage.setItem(clave, JSON.stringify(valor));
 }
 
 function numero(valor: string) {
@@ -199,7 +144,7 @@ function normalizarTexto(texto: string) {
         .replace(/[\u0300-\u036f]/g, "");
 }
 
-function colorEstado(estado: "Activo" | "Inactivo") {
+function colorEstado(estado: EstadoRegistroClinico) {
     if (estado === "Activo") {
         return "border-emerald-100 bg-emerald-50 text-emerald-700";
     }
@@ -217,6 +162,30 @@ function colorCategoria(categoria: string) {
     if (texto.includes("operatoria")) return "bg-amber-50 text-amber-700";
 
     return "bg-slate-100 text-slate-600";
+}
+
+function convertirDoctor(doctor: DoctorSupabase): Doctor {
+    return {
+        id: doctor.id,
+        nombre: doctor.nombre || "",
+        especialidad: doctor.especialidad || "",
+        telefono: doctor.telefono || "",
+        correo: doctor.correo || "",
+        horario: doctor.observaciones || "",
+        estado: doctor.estado || "Activo",
+    };
+}
+
+function convertirServicio(servicio: ServicioSupabase): Servicio {
+    return {
+        id: servicio.id,
+        nombre: servicio.nombre || "",
+        categoria: servicio.categoria || "General",
+        duracionMinutos: Number(servicio.duracion_minutos || 0),
+        precio: Number(servicio.precio || 0),
+        descripcion: servicio.descripcion || "",
+        estado: servicio.estado || "Activo",
+    };
 }
 
 export default function DoctoresServiciosPage() {
@@ -239,54 +208,50 @@ export default function DoctoresServiciosPage() {
     const [vistaActiva, setVistaActiva] = useState<VistaActiva>("Doctores");
     const [busqueda, setBusqueda] = useState("");
     const [estadoFiltro, setEstadoFiltro] = useState<
-        "Todos" | "Activo" | "Inactivo"
+        "Todos" | EstadoRegistroClinico
     >("Todos");
     const [modalActivo, setModalActivo] = useState<ModalActivo>(null);
 
+    const [cargandoDatos, setCargandoDatos] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [errorCarga, setErrorCarga] = useState("");
+
+    async function cargarDatos() {
+        setCargandoDatos(true);
+        setErrorCarga("");
+
+        try {
+            const usuarioGuardado = leerLocalStorage<UsuarioSistema | null>(
+                USUARIO_KEY,
+                null
+            );
+
+            setUsuario(usuarioGuardado);
+
+            const [doctoresSupabase, serviciosSupabase] = await Promise.all([
+                listarDoctoresSupabase(),
+                listarServiciosSupabase(),
+            ]);
+
+            setDoctores(doctoresSupabase.map(convertirDoctor));
+            setServicios(serviciosSupabase.map(convertirServicio));
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudieron cargar doctores y servicios desde Supabase.";
+
+            setErrorCarga(mensaje);
+        } finally {
+            setCargandoDatos(false);
+        }
+    }
+
     useEffect(() => {
-        const usuarioGuardado = leerLocalStorage<UsuarioSistema | null>(
-            USUARIO_KEY,
-            null
-        );
-
-        const doctoresGuardados = leerLocalStorage<Doctor[] | null>(
-            DOCTORES_KEY,
-            null
-        );
-
-        const serviciosGuardados = leerLocalStorage<Servicio[] | null>(
-            SERVICIOS_KEY,
-            null
-        );
-
-        setUsuario(usuarioGuardado);
-
-        if (doctoresGuardados && Array.isArray(doctoresGuardados)) {
-            setDoctores(doctoresGuardados);
-        } else {
-            setDoctores(doctoresIniciales);
-            guardarLocalStorage(DOCTORES_KEY, doctoresIniciales);
-        }
-
-        if (serviciosGuardados && Array.isArray(serviciosGuardados)) {
-            setServicios(serviciosGuardados);
-        } else {
-            setServicios(serviciosIniciales);
-            guardarLocalStorage(SERVICIOS_KEY, serviciosIniciales);
-        }
+        cargarDatos();
     }, []);
 
     const puedeEditar = usuario?.rol === "ADMIN";
-
-    function guardarDoctores(nuevaLista: Doctor[]) {
-        setDoctores(nuevaLista);
-        guardarLocalStorage(DOCTORES_KEY, nuevaLista);
-    }
-
-    function guardarServicios(nuevaLista: Servicio[]) {
-        setServicios(nuevaLista);
-        guardarLocalStorage(SERVICIOS_KEY, nuevaLista);
-    }
 
     function actualizarDoctor<K extends keyof FormularioDoctor>(
         campo: K,
@@ -322,6 +287,7 @@ export default function DoctoresServiciosPage() {
         setModalActivo(null);
         limpiarDoctor();
         limpiarServicio();
+        setGuardando(false);
     }
 
     function abrirNuevoDoctor() {
@@ -344,7 +310,7 @@ export default function DoctoresServiciosPage() {
         setModalActivo("servicio");
     }
 
-    function guardarDoctor(event: FormEvent<HTMLFormElement>) {
+    async function guardarDoctor(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!puedeEditar) {
@@ -362,43 +328,57 @@ export default function DoctoresServiciosPage() {
             return;
         }
 
-        if (doctorEditandoId) {
-            const nuevaLista = doctores.map((doctor) =>
-                doctor.id === doctorEditandoId
-                    ? {
-                        ...doctor,
-                        nombre: formularioDoctor.nombre.trim(),
-                        especialidad: formularioDoctor.especialidad.trim(),
-                        telefono: formularioDoctor.telefono.trim(),
-                        correo: formularioDoctor.correo.trim(),
-                        horario: formularioDoctor.horario.trim(),
-                    }
-                    : doctor
-            );
+        setGuardando(true);
 
-            guardarDoctores(nuevaLista);
+        try {
+            const estadoActual =
+                doctores.find((doctor) => doctor.id === doctorEditandoId)?.estado ||
+                "Activo";
+
+            if (doctorEditandoId) {
+                await actualizarDoctorSupabase(doctorEditandoId, {
+                    nombre: formularioDoctor.nombre.trim(),
+                    especialidad: formularioDoctor.especialidad.trim(),
+                    telefono: formularioDoctor.telefono.trim(),
+                    correo: formularioDoctor.correo.trim(),
+                    color: "#0d9488",
+                    observaciones: formularioDoctor.horario.trim(),
+                    estado: estadoActual,
+                });
+
+                await cargarDatos();
+                cerrarModal();
+                alert("Doctor actualizado correctamente.");
+                return;
+            }
+
+            await crearDoctorSupabase({
+                nombre: formularioDoctor.nombre.trim(),
+                especialidad: formularioDoctor.especialidad.trim(),
+                telefono: formularioDoctor.telefono.trim(),
+                correo: formularioDoctor.correo.trim(),
+                color: "#0d9488",
+                observaciones: formularioDoctor.horario.trim(),
+                estado: "Activo",
+            });
+
+            await cargarDatos();
             cerrarModal();
-            alert("Doctor actualizado correctamente.");
-            return;
+            setVistaActiva("Doctores");
+            alert("Doctor registrado correctamente.");
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo guardar el doctor.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
         }
-
-        const nuevoDoctor: Doctor = {
-            id: `DOC-${Date.now()}`,
-            nombre: formularioDoctor.nombre.trim(),
-            especialidad: formularioDoctor.especialidad.trim(),
-            telefono: formularioDoctor.telefono.trim(),
-            correo: formularioDoctor.correo.trim(),
-            horario: formularioDoctor.horario.trim(),
-            estado: "Activo",
-        };
-
-        guardarDoctores([nuevoDoctor, ...doctores]);
-        cerrarModal();
-        setVistaActiva("Doctores");
-        alert("Doctor registrado correctamente.");
     }
 
-    function guardarServicio(event: FormEvent<HTMLFormElement>) {
+    async function guardarServicio(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!puedeEditar) {
@@ -426,40 +406,52 @@ export default function DoctoresServiciosPage() {
             return;
         }
 
-        if (servicioEditandoId) {
-            const nuevaLista = servicios.map((servicio) =>
-                servicio.id === servicioEditandoId
-                    ? {
-                        ...servicio,
-                        nombre: formularioServicio.nombre.trim(),
-                        categoria: formularioServicio.categoria.trim(),
-                        duracionMinutos: numero(formularioServicio.duracionMinutos),
-                        precio: numero(formularioServicio.precio),
-                        descripcion: formularioServicio.descripcion.trim(),
-                    }
-                    : servicio
-            );
+        setGuardando(true);
 
-            guardarServicios(nuevaLista);
+        try {
+            const estadoActual =
+                servicios.find((servicio) => servicio.id === servicioEditandoId)
+                    ?.estado || "Activo";
+
+            if (servicioEditandoId) {
+                await actualizarServicioSupabase(servicioEditandoId, {
+                    nombre: formularioServicio.nombre.trim(),
+                    categoria: formularioServicio.categoria.trim(),
+                    duracion_minutos: numero(formularioServicio.duracionMinutos),
+                    precio: numero(formularioServicio.precio),
+                    descripcion: formularioServicio.descripcion.trim(),
+                    estado: estadoActual,
+                });
+
+                await cargarDatos();
+                cerrarModal();
+                alert("Servicio actualizado correctamente.");
+                return;
+            }
+
+            await crearServicioSupabase({
+                nombre: formularioServicio.nombre.trim(),
+                categoria: formularioServicio.categoria.trim(),
+                duracion_minutos: numero(formularioServicio.duracionMinutos),
+                precio: numero(formularioServicio.precio),
+                descripcion: formularioServicio.descripcion.trim(),
+                estado: "Activo",
+            });
+
+            await cargarDatos();
             cerrarModal();
-            alert("Servicio actualizado correctamente.");
-            return;
+            setVistaActiva("Servicios");
+            alert("Servicio registrado correctamente.");
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo guardar el servicio.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
         }
-
-        const nuevoServicio: Servicio = {
-            id: `SERV-${Date.now()}`,
-            nombre: formularioServicio.nombre.trim(),
-            categoria: formularioServicio.categoria.trim(),
-            duracionMinutos: numero(formularioServicio.duracionMinutos),
-            precio: numero(formularioServicio.precio),
-            descripcion: formularioServicio.descripcion.trim(),
-            estado: "Activo",
-        };
-
-        guardarServicios([nuevoServicio, ...servicios]);
-        cerrarModal();
-        setVistaActiva("Servicios");
-        alert("Servicio registrado correctamente.");
     }
 
     function editarDoctor(doctor: Doctor) {
@@ -496,11 +488,14 @@ export default function DoctoresServiciosPage() {
         setModalActivo("servicio");
     }
 
-    function cambiarEstadoDoctor(doctor: Doctor) {
+    async function cambiarEstadoDoctor(doctor: Doctor) {
         if (!puedeEditar) {
             alert("Solo el administrador puede modificar doctores.");
             return;
         }
+
+        const nuevoEstado: EstadoRegistroClinico =
+            doctor.estado === "Activo" ? "Inactivo" : "Activo";
 
         const confirmar = window.confirm(
             `¿Seguro que deseas ${doctor.estado === "Activo" ? "desactivar" : "activar"
@@ -509,23 +504,27 @@ export default function DoctoresServiciosPage() {
 
         if (!confirmar) return;
 
-        const nuevaLista = doctores.map((item) =>
-            item.id === doctor.id
-                ? {
-                    ...item,
-                    estado: item.estado === "Activo" ? "Inactivo" : "Activo",
-                }
-                : item
-        );
+        try {
+            await cambiarEstadoDoctorSupabase(doctor.id, nuevoEstado);
+            await cargarDatos();
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo cambiar el estado del doctor.";
 
-        guardarDoctores(nuevaLista);
+            alert(mensaje);
+        }
     }
 
-    function cambiarEstadoServicio(servicio: Servicio) {
+    async function cambiarEstadoServicio(servicio: Servicio) {
         if (!puedeEditar) {
             alert("Solo el administrador puede modificar servicios.");
             return;
         }
+
+        const nuevoEstado: EstadoRegistroClinico =
+            servicio.estado === "Activo" ? "Inactivo" : "Activo";
 
         const confirmar = window.confirm(
             `¿Seguro que deseas ${servicio.estado === "Activo" ? "desactivar" : "activar"
@@ -534,16 +533,17 @@ export default function DoctoresServiciosPage() {
 
         if (!confirmar) return;
 
-        const nuevaLista = servicios.map((item) =>
-            item.id === servicio.id
-                ? {
-                    ...item,
-                    estado: item.estado === "Activo" ? "Inactivo" : "Activo",
-                }
-                : item
-        );
+        try {
+            await cambiarEstadoServicioSupabase(servicio.id, nuevoEstado);
+            await cargarDatos();
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo cambiar el estado del servicio.";
 
-        guardarServicios(nuevaLista);
+            alert(mensaje);
+        }
     }
 
     const doctoresActivos = doctores.filter(
@@ -638,7 +638,7 @@ export default function DoctoresServiciosPage() {
     return (
         <AppShell
             titulo="Doctores y Servicios"
-            descripcion="Catálogo clínico conectado con agenda, presupuestos y caja"
+            descripcion="Catálogo clínico conectado con Supabase, agenda, presupuestos y caja"
             moduloActivo="Doctores y Servicios"
         >
             {!puedeEditar && (
@@ -658,6 +658,22 @@ export default function DoctoresServiciosPage() {
                 </section>
             )}
 
+            {errorCarga && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudieron cargar los datos
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {errorCarga}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
             <section className="overflow-hidden rounded-[30px] border border-white bg-slate-900 shadow-[0_24px_80px_rgba(15,23,42,0.18)]">
                 <div className="relative p-6 text-white md:p-7">
                     <Sparkles className="absolute right-8 top-8 h-24 w-24 text-white opacity-10" />
@@ -665,23 +681,32 @@ export default function DoctoresServiciosPage() {
                     <div className="relative z-10 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
                         <div>
                             <p className="text-[11px] font-black uppercase tracking-[0.18em] text-teal-300">
-                                Catálogo clínico
+                                Catálogo clínico en Supabase
                             </p>
                             <h2 className="mt-2 text-3xl font-black">
                                 Doctores y servicios
                             </h2>
                             <p className="mt-3 max-w-3xl text-sm leading-6 text-white/60">
                                 Administrá los profesionales y tratamientos que se usan
-                                en Agenda, presupuestos, odontograma y Caja. La pantalla
-                                queda más limpia porque los registros se hacen desde ventanas.
+                                en Agenda, presupuestos, odontograma y Caja. Los datos ya
+                                se guardan en Supabase por clínica.
                             </p>
                         </div>
 
-                        <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="grid gap-2 sm:grid-cols-3">
+                            <button
+                                type="button"
+                                onClick={cargarDatos}
+                                className="flex items-center justify-center gap-2 rounded-2xl bg-white/10 px-5 py-3 text-[12px] font-black text-white hover:bg-white/15"
+                            >
+                                <RefreshCcw className="h-4 w-4" />
+                                Recargar
+                            </button>
+
                             <button
                                 type="button"
                                 onClick={abrirNuevoDoctor}
-                                disabled={!puedeEditar}
+                                disabled={!puedeEditar || cargandoDatos}
                                 className="flex items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-[12px] font-black text-slate-900 shadow-sm hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 <Plus className="h-4 w-4" />
@@ -691,7 +716,7 @@ export default function DoctoresServiciosPage() {
                             <button
                                 type="button"
                                 onClick={abrirNuevoServicio}
-                                disabled={!puedeEditar}
+                                disabled={!puedeEditar || cargandoDatos}
                                 className="flex items-center justify-center gap-2 rounded-2xl bg-teal-500 px-5 py-3 text-[12px] font-black text-white shadow-sm hover:bg-teal-400 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                                 <Plus className="h-4 w-4" />
@@ -701,6 +726,15 @@ export default function DoctoresServiciosPage() {
                     </div>
                 </div>
             </section>
+
+            {cargandoDatos && (
+                <section className="mt-4 rounded-2xl border border-teal-100 bg-teal-50 px-5 py-4">
+                    <p className="flex items-center gap-2 text-sm font-black text-teal-800">
+                        <Activity className="h-4 w-4 animate-pulse" />
+                        Cargando doctores y servicios desde Supabase...
+                    </p>
+                </section>
+            )}
 
             <section className="mt-4 grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
@@ -817,7 +851,7 @@ export default function DoctoresServiciosPage() {
                             value={estadoFiltro}
                             onChange={(event) =>
                                 setEstadoFiltro(
-                                    event.target.value as "Todos" | "Activo" | "Inactivo"
+                                    event.target.value as "Todos" | EstadoRegistroClinico
                                 )
                             }
                             className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-semibold outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
@@ -881,7 +915,7 @@ export default function DoctoresServiciosPage() {
 
                                         <p className="mt-1 flex items-center gap-1.5 text-sm font-bold text-teal-700">
                                             <BriefcaseMedical className="h-4 w-4" />
-                                            {doctor.especialidad}
+                                            {doctor.especialidad || "Sin especialidad"}
                                         </p>
                                     </div>
                                 </div>
@@ -922,7 +956,7 @@ export default function DoctoresServiciosPage() {
                                     <button
                                         type="button"
                                         onClick={() => editarDoctor(doctor)}
-                                        disabled={!puedeEditar}
+                                        disabled={!puedeEditar || guardando}
                                         className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-[11px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         <Edit3 className="h-3.5 w-3.5" />
@@ -932,7 +966,7 @@ export default function DoctoresServiciosPage() {
                                     <button
                                         type="button"
                                         onClick={() => cambiarEstadoDoctor(doctor)}
-                                        disabled={!puedeEditar}
+                                        disabled={!puedeEditar || guardando}
                                         className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                                     >
                                         <Trash2 className="h-3.5 w-3.5" />
@@ -1046,7 +1080,7 @@ export default function DoctoresServiciosPage() {
                                                 <button
                                                     type="button"
                                                     onClick={() => editarServicio(servicio)}
-                                                    disabled={!puedeEditar}
+                                                    disabled={!puedeEditar || guardando}
                                                     className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-[11px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     <Edit3 className="h-3.5 w-3.5" />
@@ -1058,7 +1092,7 @@ export default function DoctoresServiciosPage() {
                                                     onClick={() =>
                                                         cambiarEstadoServicio(servicio)
                                                     }
-                                                    disabled={!puedeEditar}
+                                                    disabled={!puedeEditar || guardando}
                                                     className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     <Trash2 className="h-3.5 w-3.5" />
@@ -1097,9 +1131,9 @@ export default function DoctoresServiciosPage() {
                             Conexión con Agenda Médica
                         </h3>
                         <p className="mt-2 max-w-3xl text-sm leading-6 text-white/75">
-                            Los doctores y servicios activos aparecen al crear citas. Cuando
-                            seleccionás un servicio en Agenda, el sistema carga duración y
-                            precio para facilitar el cobro en Caja.
+                            Los doctores y servicios activos aparecerán al crear citas.
+                            Cuando seleccionés un servicio en Agenda, el sistema podrá cargar
+                            duración y precio para facilitar el cobro en Caja.
                         </p>
                     </div>
                 </div>
@@ -1219,19 +1253,23 @@ export default function DoctoresServiciosPage() {
                                 <button
                                     type="button"
                                     onClick={cerrarModal}
-                                    className="rounded-xl bg-slate-100 px-5 py-3 text-[12px] font-bold text-slate-600 hover:bg-slate-200"
+                                    disabled={guardando}
+                                    className="rounded-xl bg-slate-100 px-5 py-3 text-[12px] font-bold text-slate-600 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     Cancelar
                                 </button>
 
                                 <button
                                     type="submit"
-                                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800"
+                                    disabled={guardando}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <Plus className="h-4 w-4" />
-                                    {doctorEditandoId
-                                        ? "Guardar cambios"
-                                        : "Registrar doctor"}
+                                    {guardando
+                                        ? "Guardando..."
+                                        : doctorEditandoId
+                                            ? "Guardar cambios"
+                                            : "Registrar doctor"}
                                 </button>
                             </div>
                         </form>
@@ -1362,19 +1400,23 @@ export default function DoctoresServiciosPage() {
                                 <button
                                     type="button"
                                     onClick={cerrarModal}
-                                    className="rounded-xl bg-slate-100 px-5 py-3 text-[12px] font-bold text-slate-600 hover:bg-slate-200"
+                                    disabled={guardando}
+                                    className="rounded-xl bg-slate-100 px-5 py-3 text-[12px] font-bold text-slate-600 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
                                 >
                                     Cancelar
                                 </button>
 
                                 <button
                                     type="submit"
-                                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800"
+                                    disabled={guardando}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <Plus className="h-4 w-4" />
-                                    {servicioEditandoId
-                                        ? "Guardar cambios"
-                                        : "Registrar servicio"}
+                                    {guardando
+                                        ? "Guardando..."
+                                        : servicioEditandoId
+                                            ? "Guardar cambios"
+                                            : "Registrar servicio"}
                                 </button>
                             </div>
                         </form>

@@ -15,6 +15,7 @@ import {
     PackageMinus,
     PackagePlus,
     Plus,
+    RefreshCcw,
     Search,
     ShieldAlert,
     Trash2,
@@ -28,13 +29,26 @@ import {
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
 
+import {
+    actualizarProductoInventarioSupabase,
+    cambiarEstadoProductoInventarioSupabase,
+    crearProductoInventarioSupabase,
+    listarMovimientosInventarioSupabase,
+    listarProductosInventarioSupabase,
+    registrarMovimientoInventarioSupabase,
+    type EstadoProductoInventarioSupabase,
+    type MovimientoInventarioSupabase,
+    type ProductoInventarioSupabase,
+    type TipoMovimientoInventarioSupabase,
+} from "@/lib/supabase/inventario";
+
 type UsuarioSistema = {
     usuario: string;
     nombre: string;
     rol: string;
 };
 
-type EstadoProducto = "Activo" | "Inactivo";
+type EstadoProducto = EstadoProductoInventarioSupabase;
 
 type Producto = {
     id: string;
@@ -51,12 +65,7 @@ type Producto = {
     estado: EstadoProducto;
 };
 
-type TipoMovimiento =
-    | "Entrada"
-    | "Salida"
-    | "Uso clínico"
-    | "Pérdida"
-    | "Ajuste";
+type TipoMovimiento = TipoMovimientoInventarioSupabase;
 
 type MovimientoInventario = {
     id: string;
@@ -94,50 +103,7 @@ type FormularioMovimiento = {
     motivo: string;
 };
 
-const productosIniciales: Producto[] = [
-    {
-        id: "1",
-        codigo: "PROD-001",
-        nombre: "Guantes de nitrilo",
-        categoria: "Insumos",
-        unidad: "Caja",
-        stock: 12,
-        stockMinimo: 5,
-        costoCompra: 250,
-        precioVenta: 0,
-        proveedor: "Dental Supply Nicaragua",
-        vencimiento: "",
-        estado: "Activo",
-    },
-    {
-        id: "2",
-        codigo: "PROD-002",
-        nombre: "Anestesia dental",
-        categoria: "Medicamento",
-        unidad: "Frasco",
-        stock: 8,
-        stockMinimo: 3,
-        costoCompra: 430,
-        precioVenta: 0,
-        proveedor: "Proveedor Médico Central",
-        vencimiento: "",
-        estado: "Activo",
-    },
-    {
-        id: "3",
-        codigo: "PROD-003",
-        nombre: "Cepillo dental",
-        categoria: "Producto venta",
-        unidad: "Unidad",
-        stock: 30,
-        stockMinimo: 10,
-        costoCompra: 35,
-        precioVenta: 80,
-        proveedor: "Dental Supply Nicaragua",
-        vencimiento: "",
-        estado: "Activo",
-    },
-];
+const productosIniciales: Producto[] = [];
 
 const formularioProductoVacio: FormularioProducto = {
     codigo: "",
@@ -177,7 +143,7 @@ function horaActualLocal() {
     return `${hours}:${minutes}`;
 }
 
-function numero(valor: string) {
+function numero(valor: string | number | null | undefined) {
     const convertido = Number(valor || 0);
 
     if (Number.isNaN(convertido)) return 0;
@@ -216,6 +182,53 @@ function colorMovimiento(tipo: TipoMovimiento) {
     return "bg-amber-50 text-amber-700";
 }
 
+
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
+}
+
+function normalizarTexto(valor: unknown) {
+    return String(valor || "")
+        .toLowerCase()
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+}
+
+function convertirProducto(producto: ProductoInventarioSupabase): Producto {
+    return {
+        id: producto.id,
+        codigo: producto.codigo || "",
+        nombre: producto.nombre || "",
+        categoria: producto.categoria || "",
+        unidad: producto.unidad || "",
+        stock: Number(producto.stock || 0),
+        stockMinimo: Number(producto.stock_minimo || 0),
+        costoCompra: Number(producto.costo_compra || 0),
+        precioVenta: Number(producto.precio_venta || 0),
+        proveedor: producto.proveedor || "",
+        vencimiento: producto.vencimiento || "",
+        estado: producto.estado || "Activo",
+    };
+}
+
+function convertirMovimiento(movimiento: MovimientoInventarioSupabase): MovimientoInventario {
+    return {
+        id: movimiento.id,
+        fecha: movimiento.fecha,
+        hora: horaCorta(movimiento.hora),
+        productoId: movimiento.producto_id,
+        productoNombre: movimiento.producto_nombre || "",
+        tipo: movimiento.tipo,
+        cantidad: Number(movimiento.cantidad || 0),
+        stockAnterior: Number(movimiento.stock_anterior || 0),
+        stockNuevo: Number(movimiento.stock_nuevo || 0),
+        costoUnitario: Number(movimiento.costo_unitario || 0),
+        motivo: movimiento.motivo || "",
+        usuarioNombre: movimiento.usuario_nombre || "",
+    };
+}
+
 export default function InventarioPage() {
     const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
@@ -241,46 +254,45 @@ export default function InventarioPage() {
         "Todos" | "Activo" | "Inactivo"
     >("Todos");
 
+    const [cargando, setCargando] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+
+            if (usuarioGuardado) {
+                setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
+            }
+
+            setConfiguracion(obtenerConfiguracionClinica());
+
+            const [productosSupabase, movimientosSupabase] = await Promise.all([
+                listarProductosInventarioSupabase(),
+                listarMovimientosInventarioSupabase(120),
+            ]);
+
+            setProductos(productosSupabase.map(convertirProducto));
+            setMovimientos(movimientosSupabase.map(convertirMovimiento));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el inventario desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
+
     useEffect(() => {
-        const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
-        const productosGuardados = localStorage.getItem("productos_sistema_clinico");
-        const movimientosGuardados = localStorage.getItem(
-            "movimientos_inventario_sistema_clinico"
-        );
-
-        if (usuarioGuardado) {
-            setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
-        }
-
-        setConfiguracion(obtenerConfiguracionClinica());
-
-        if (productosGuardados) {
-            setProductos(JSON.parse(productosGuardados) as Producto[]);
-        } else {
-            setProductos(productosIniciales);
-            localStorage.setItem(
-                "productos_sistema_clinico",
-                JSON.stringify(productosIniciales)
-            );
-        }
-
-        if (movimientosGuardados) {
-            setMovimientos(JSON.parse(movimientosGuardados) as MovimientoInventario[]);
-        }
+        cargarDatos();
     }, []);
-
-    function guardarProductos(nuevaLista: Producto[]) {
-        setProductos(nuevaLista);
-        localStorage.setItem("productos_sistema_clinico", JSON.stringify(nuevaLista));
-    }
-
-    function guardarMovimientos(nuevaLista: MovimientoInventario[]) {
-        setMovimientos(nuevaLista);
-        localStorage.setItem(
-            "movimientos_inventario_sistema_clinico",
-            JSON.stringify(nuevaLista)
-        );
-    }
 
     function actualizarProducto<K extends keyof FormularioProducto>(
         campo: K,
@@ -311,7 +323,7 @@ export default function InventarioPage() {
         setFormularioMovimiento(formularioMovimientoVacio);
     }
 
-    function guardarProducto(event: FormEvent<HTMLFormElement>) {
+    async function guardarProducto(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!formularioProducto.nombre.trim()) {
@@ -349,94 +361,44 @@ export default function InventarioPage() {
             return;
         }
 
-        if (productoEditandoId) {
-            const productoAnterior = productos.find(
-                (producto) => producto.id === productoEditandoId
-            );
+        setGuardando(true);
 
-            const nuevaLista = productos.map((producto) =>
-                producto.id === productoEditandoId
-                    ? {
-                        ...producto,
-                        codigo: formularioProducto.codigo.trim(),
-                        nombre: formularioProducto.nombre.trim(),
-                        categoria: formularioProducto.categoria.trim(),
-                        unidad: formularioProducto.unidad.trim(),
-                        stock: numero(formularioProducto.stock),
-                        stockMinimo: numero(formularioProducto.stockMinimo),
-                        costoCompra: numero(formularioProducto.costoCompra),
-                        precioVenta: numero(formularioProducto.precioVenta),
-                        proveedor: formularioProducto.proveedor.trim(),
-                        vencimiento: formularioProducto.vencimiento,
-                    }
-                    : producto
-            );
+        try {
+            const payload = {
+                codigo: formularioProducto.codigo.trim(),
+                nombre: formularioProducto.nombre.trim(),
+                categoria: formularioProducto.categoria.trim(),
+                unidad: formularioProducto.unidad.trim(),
+                stock: numero(formularioProducto.stock),
+                stock_minimo: numero(formularioProducto.stockMinimo),
+                costo_compra: numero(formularioProducto.costoCompra),
+                precio_venta: numero(formularioProducto.precioVenta),
+                proveedor: formularioProducto.proveedor.trim(),
+                vencimiento: formularioProducto.vencimiento,
+            };
 
-            guardarProductos(nuevaLista);
-
-            if (
-                productoAnterior &&
-                productoAnterior.stock !== numero(formularioProducto.stock)
-            ) {
-                const nuevoMovimiento: MovimientoInventario = {
-                    id: `MOV-${Date.now()}`,
-                    fecha: fechaHoyLocal(),
-                    hora: horaActualLocal(),
-                    productoId: productoAnterior.id,
-                    productoNombre: formularioProducto.nombre.trim(),
-                    tipo: "Ajuste",
-                    cantidad: numero(formularioProducto.stock),
-                    stockAnterior: productoAnterior.stock,
-                    stockNuevo: numero(formularioProducto.stock),
-                    costoUnitario: numero(formularioProducto.costoCompra),
-                    motivo: "Ajuste automático por edición del producto",
-                    usuarioNombre: usuario?.nombre || "Usuario no identificado",
-                };
-
-                guardarMovimientos([nuevoMovimiento, ...movimientos]);
+            if (productoEditandoId) {
+                await actualizarProductoInventarioSupabase(productoEditandoId, payload);
+                limpiarProducto();
+                await cargarDatos();
+                alert("Producto actualizado correctamente.");
+                return;
             }
 
+            await crearProductoInventarioSupabase(payload);
             limpiarProducto();
-            alert("Producto actualizado correctamente.");
-            return;
+            await cargarDatos();
+            alert("Producto registrado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo guardar el producto.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
         }
-
-        const nuevoProducto: Producto = {
-            id: `PROD-${Date.now()}`,
-            codigo: formularioProducto.codigo.trim() || `PROD-${Date.now()}`,
-            nombre: formularioProducto.nombre.trim(),
-            categoria: formularioProducto.categoria.trim(),
-            unidad: formularioProducto.unidad.trim(),
-            stock: numero(formularioProducto.stock),
-            stockMinimo: numero(formularioProducto.stockMinimo),
-            costoCompra: numero(formularioProducto.costoCompra),
-            precioVenta: numero(formularioProducto.precioVenta),
-            proveedor: formularioProducto.proveedor.trim(),
-            vencimiento: formularioProducto.vencimiento,
-            estado: "Activo",
-        };
-
-        guardarProductos([nuevoProducto, ...productos]);
-
-        const nuevoMovimiento: MovimientoInventario = {
-            id: `MOV-${Date.now()}`,
-            fecha: fechaHoyLocal(),
-            hora: horaActualLocal(),
-            productoId: nuevoProducto.id,
-            productoNombre: nuevoProducto.nombre,
-            tipo: "Entrada",
-            cantidad: nuevoProducto.stock,
-            stockAnterior: 0,
-            stockNuevo: nuevoProducto.stock,
-            costoUnitario: nuevoProducto.costoCompra,
-            motivo: "Registro inicial del producto",
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-        };
-
-        guardarMovimientos([nuevoMovimiento, ...movimientos]);
-        limpiarProducto();
-
-        alert("Producto registrado correctamente.");
     }
 
     function editarProducto(producto: Producto) {
@@ -455,27 +417,34 @@ export default function InventarioPage() {
         });
     }
 
-    function cambiarEstadoProducto(producto: Producto) {
+    async function cambiarEstadoProducto(producto: Producto) {
         const confirmar = window.confirm(
-            `¿Seguro que deseas ${producto.estado === "Activo" ? "desactivar" : "activar"
-            } este producto?`
+            `¿Seguro que deseas ${producto.estado === "Activo" ? "desactivar" : "activar"} este producto?`
         );
 
         if (!confirmar) return;
 
-        const nuevaLista = productos.map((item) =>
-            item.id === producto.id
-                ? {
-                    ...item,
-                    estado: item.estado === "Activo" ? "Inactivo" : "Activo",
-                }
-                : item
-        );
+        setGuardando(true);
 
-        guardarProductos(nuevaLista);
+        try {
+            await cambiarEstadoProductoInventarioSupabase(
+                producto.id,
+                producto.estado === "Activo" ? "Inactivo" : "Activo"
+            );
+            await cargarDatos();
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cambiar el estado del producto.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
-    function registrarMovimiento(event: FormEvent<HTMLFormElement>) {
+    async function registrarMovimiento(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         const producto = productos.find(
@@ -499,67 +468,34 @@ export default function InventarioPage() {
             return;
         }
 
-        const stockAnterior = producto.stock;
-        let stockNuevo = stockAnterior;
+        setGuardando(true);
 
-        if (formularioMovimiento.tipo === "Entrada") {
-            stockNuevo = stockAnterior + cantidad;
+        try {
+            await registrarMovimientoInventarioSupabase({
+                producto_id: producto.id,
+                tipo: formularioMovimiento.tipo,
+                cantidad,
+                costo_unitario:
+                    numero(formularioMovimiento.costoUnitario) || producto.costoCompra,
+                motivo:
+                    formularioMovimiento.motivo.trim() ||
+                    `Movimiento de inventario: ${formularioMovimiento.tipo}`,
+                usuario_nombre: usuario?.nombre || "Usuario no identificado",
+            });
+
+            limpiarMovimiento();
+            await cargarDatos();
+            alert("Movimiento registrado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo registrar el movimiento.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
         }
-
-        if (
-            formularioMovimiento.tipo === "Salida" ||
-            formularioMovimiento.tipo === "Uso clínico" ||
-            formularioMovimiento.tipo === "Pérdida"
-        ) {
-            if (cantidad > stockAnterior) {
-                alert("No hay suficiente stock disponible para este movimiento.");
-                return;
-            }
-
-            stockNuevo = stockAnterior - cantidad;
-        }
-
-        if (formularioMovimiento.tipo === "Ajuste") {
-            stockNuevo = cantidad;
-        }
-
-        const nuevaListaProductos = productos.map((item) =>
-            item.id === producto.id
-                ? {
-                    ...item,
-                    stock: stockNuevo,
-                    costoCompra:
-                        formularioMovimiento.tipo === "Entrada" &&
-                            numero(formularioMovimiento.costoUnitario) > 0
-                            ? numero(formularioMovimiento.costoUnitario)
-                            : item.costoCompra,
-                }
-                : item
-        );
-
-        const nuevoMovimiento: MovimientoInventario = {
-            id: `MOV-${Date.now()}`,
-            fecha: fechaHoyLocal(),
-            hora: horaActualLocal(),
-            productoId: producto.id,
-            productoNombre: producto.nombre,
-            tipo: formularioMovimiento.tipo,
-            cantidad,
-            stockAnterior,
-            stockNuevo,
-            costoUnitario:
-                numero(formularioMovimiento.costoUnitario) || producto.costoCompra,
-            motivo:
-                formularioMovimiento.motivo.trim() ||
-                `Movimiento de inventario: ${formularioMovimiento.tipo}`,
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-        };
-
-        guardarProductos(nuevaListaProductos);
-        guardarMovimientos([nuevoMovimiento, ...movimientos]);
-        limpiarMovimiento();
-
-        alert("Movimiento registrado correctamente.");
     }
 
     const categorias = useMemo(() => {
@@ -571,15 +507,15 @@ export default function InventarioPage() {
     }, [productos]);
 
     const productosFiltrados = useMemo(() => {
-        const texto = busqueda.toLowerCase().trim();
+        const texto = normalizarTexto(busqueda);
 
         return productos.filter((producto) => {
             const coincideTexto =
                 !texto ||
-                producto.nombre.toLowerCase().includes(texto) ||
-                producto.codigo.toLowerCase().includes(texto) ||
-                producto.categoria.toLowerCase().includes(texto) ||
-                producto.proveedor.toLowerCase().includes(texto);
+                normalizarTexto(producto.nombre).includes(texto) ||
+                normalizarTexto(producto.codigo).includes(texto) ||
+                normalizarTexto(producto.categoria).includes(texto) ||
+                normalizarTexto(producto.proveedor).includes(texto);
 
             const coincideCategoria =
                 filtroCategoria === "Todas" || producto.categoria === filtroCategoria;
@@ -629,6 +565,43 @@ export default function InventarioPage() {
             descripcion="Control de productos, stock, movimientos, vencimientos y disponibilidad para venta"
             moduloActivo="Almacén e Inventario"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar inventario
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Inventario conectado a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Productos, stock y movimientos ya se guardan en base de datos.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando || guardando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    Recargar
+                </button>
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
                     <div className="flex items-start justify-between">
@@ -833,8 +806,8 @@ export default function InventarioPage() {
                                                 <div className="flex gap-3">
                                                     <div
                                                         className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl ${bajoStock || vencido
-                                                                ? "bg-red-50 text-red-700"
-                                                                : "bg-teal-50 text-teal-700"
+                                                            ? "bg-red-50 text-red-700"
+                                                            : "bg-teal-50 text-teal-700"
                                                             }`}
                                                     >
                                                         <Package className="h-6 w-6" />
@@ -916,28 +889,28 @@ export default function InventarioPage() {
 
                                                 <div
                                                     className={`rounded-2xl p-4 ${vencido
-                                                            ? "bg-red-50"
-                                                            : porVencer
-                                                                ? "bg-amber-50"
-                                                                : "bg-slate-50"
+                                                        ? "bg-red-50"
+                                                        : porVencer
+                                                            ? "bg-amber-50"
+                                                            : "bg-slate-50"
                                                         }`}
                                                 >
                                                     <p
                                                         className={`text-[11px] font-bold ${vencido
-                                                                ? "text-red-700"
-                                                                : porVencer
-                                                                    ? "text-amber-700"
-                                                                    : "text-slate-400"
+                                                            ? "text-red-700"
+                                                            : porVencer
+                                                                ? "text-amber-700"
+                                                                : "text-slate-400"
                                                             }`}
                                                     >
                                                         Vencimiento
                                                     </p>
                                                     <p
                                                         className={`mt-1 text-sm font-black ${vencido
-                                                                ? "text-red-700"
-                                                                : porVencer
-                                                                    ? "text-amber-700"
-                                                                    : "text-slate-800"
+                                                            ? "text-red-700"
+                                                            : porVencer
+                                                                ? "text-amber-700"
+                                                                : "text-slate-800"
                                                             }`}
                                                     >
                                                         {producto.vencimiento || "No aplica"}
@@ -988,7 +961,7 @@ export default function InventarioPage() {
                                             No encontramos productos
                                         </h4>
                                         <p className="mt-1 text-xs text-slate-400">
-                                            Probá cambiar filtros o registrar un nuevo producto.
+                                            {cargando ? "Cargando productos desde Supabase..." : "Probá cambiar filtros o registrar un nuevo producto."}
                                         </p>
                                     </div>
                                 )}
@@ -1170,9 +1143,12 @@ export default function InventarioPage() {
                             </div>
 
                             <div className="mt-5 flex flex-wrap gap-2">
-                                <button className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90">
+                                <button
+                                    disabled={guardando}
+                                    className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
                                     <Plus className="h-4 w-4" />
-                                    {productoEditandoId ? "Guardar cambios" : "Registrar producto"}
+                                    {guardando ? "Guardando..." : productoEditandoId ? "Guardar cambios" : "Registrar producto"}
                                 </button>
 
                                 <button
@@ -1337,9 +1313,12 @@ export default function InventarioPage() {
                             </div>
 
                             <div className="mt-5 flex flex-wrap gap-2">
-                                <button className="flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800">
+                                <button
+                                    disabled={guardando}
+                                    className="flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
                                     <PackageMinus className="h-4 w-4" />
-                                    Registrar movimiento
+                                    {guardando ? "Guardando..." : "Registrar movimiento"}
                                 </button>
 
                                 <button
@@ -1449,7 +1428,7 @@ export default function InventarioPage() {
                                         colSpan={8}
                                         className="px-6 py-10 text-center text-[12px] text-slate-400"
                                     >
-                                        Todavía no hay movimientos de inventario.
+                                        {cargando ? "Cargando movimientos desde Supabase..." : "Todavía no hay movimientos de inventario."}
                                     </td>
                                 </tr>
                             )}
@@ -1465,9 +1444,9 @@ export default function InventarioPage() {
                     <div className="relative z-10">
                         <h3 className="text-xl font-black">Conexión con Caja y Venta</h3>
                         <p className="mt-2 max-w-3xl text-sm leading-6 text-white/75">
-                            Los productos activos con precio de venta aparecerán en Caja. Al
-                            venderlos, el sistema descuenta stock y registra automáticamente el
-                            movimiento de salida.
+                            Los productos activos con precio de venta ya quedan listos en Supabase.
+                            En el siguiente paso ajustamos Caja para leer estos productos reales,
+                            descontar stock y registrar automáticamente la salida.
                         </p>
                     </div>
                 </div>

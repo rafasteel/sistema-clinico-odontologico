@@ -24,6 +24,14 @@ import {
     X,
 } from "lucide-react";
 import AppShell from "@/components/AppShell";
+import {
+    actualizarPacienteSupabase,
+    cambiarEstadoPacienteSupabase,
+    crearPacienteSupabase,
+    listarPacientesSupabase,
+    type EstadoRegistroClinico,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
 
 type Paciente = {
     id: string;
@@ -36,7 +44,7 @@ type Paciente = {
     enfermedades: string;
     medicamentos: string;
     observaciones: string;
-    estado: "Activo" | "Inactivo";
+    estado: EstadoRegistroClinico;
     saldoPendiente: number;
     ultimaCita: string;
 };
@@ -84,56 +92,7 @@ type CuentaPorCobrar = {
     abonos?: AbonoCuenta[];
 };
 
-const PACIENTES_KEY = "pacientes_sistema_clinico";
 const CUENTAS_COBRAR_KEY = "cuentas_cobrar_sistema_clinico";
-
-const pacientesIniciales: Paciente[] = [
-    {
-        id: "1",
-        nombre: "María López",
-        telefono: "8888-1122",
-        cedula: "001-010190-0000A",
-        fechaNacimiento: "1990-01-01",
-        direccion: "Managua, Nicaragua",
-        alergias: "Penicilina",
-        enfermedades: "Ninguna registrada",
-        medicamentos: "No refiere",
-        observaciones: "Paciente frecuente. Prefiere citas por la mañana.",
-        estado: "Activo",
-        saldoPendiente: 0,
-        ultimaCita: "",
-    },
-    {
-        id: "2",
-        nombre: "Carlos Hernández",
-        telefono: "7777-3344",
-        cedula: "001-150285-0001B",
-        fechaNacimiento: "1985-02-15",
-        direccion: "Masaya, Nicaragua",
-        alergias: "No refiere",
-        enfermedades: "Hipertensión controlada",
-        medicamentos: "Losartán",
-        observaciones: "Controlar presión antes de procedimientos.",
-        estado: "Activo",
-        saldoPendiente: 1500,
-        ultimaCita: "",
-    },
-    {
-        id: "3",
-        nombre: "Fernanda Ruiz",
-        telefono: "8555-9988",
-        cedula: "001-100300-0002C",
-        fechaNacimiento: "2000-03-10",
-        direccion: "Carretera Sur, Managua",
-        alergias: "No refiere",
-        enfermedades: "No refiere",
-        medicamentos: "No refiere",
-        observaciones: "Interesada en tratamiento estético.",
-        estado: "Activo",
-        saldoPendiente: 0,
-        ultimaCita: "",
-    },
-];
 
 const formularioVacio: FormularioPaciente = {
     nombre: "",
@@ -146,6 +105,24 @@ const formularioVacio: FormularioPaciente = {
     medicamentos: "",
     observaciones: "",
 };
+
+function convertirPacienteSupabase(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "No refiere",
+        enfermedades: paciente.enfermedades_sistemicas || paciente.antecedentes || "No refiere",
+        medicamentos: paciente.medicamentos_actuales || "No refiere",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
+}
 
 function calcularEdad(fechaNacimiento: string) {
     if (!fechaNacimiento) return "No registrada";
@@ -309,27 +286,6 @@ function colorEstado(estado: Paciente["estado"]) {
     return "border-slate-200 bg-slate-100 text-slate-500";
 }
 
-function leerPacientesGuardados() {
-    if (typeof window === "undefined") return pacientesIniciales;
-
-    try {
-        const pacientesGuardados = localStorage.getItem(PACIENTES_KEY);
-
-        if (!pacientesGuardados) {
-            localStorage.setItem(PACIENTES_KEY, JSON.stringify(pacientesIniciales));
-            return pacientesIniciales;
-        }
-
-        const lista = JSON.parse(pacientesGuardados) as Paciente[];
-
-        if (!Array.isArray(lista)) return pacientesIniciales;
-
-        return lista;
-    } catch {
-        return pacientesIniciales;
-    }
-}
-
 export default function PacientesPage() {
     const [pacientes, setPacientes] = useState<Paciente[]>([]);
     const [cuentasCobrar, setCuentasCobrar] = useState<CuentaPorCobrar[]>([]);
@@ -337,27 +293,49 @@ export default function PacientesPage() {
         useState<FormularioPaciente>(formularioVacio);
     const [busqueda, setBusqueda] = useState("");
     const [filtroEstado, setFiltroEstado] = useState<
-        "Todos" | "Activo" | "Inactivo"
+        "Todos" | EstadoRegistroClinico
     >("Todos");
     const [pacienteSeleccionadoId, setPacienteSeleccionadoId] = useState("");
     const [pacienteEditandoId, setPacienteEditandoId] = useState<string | null>(
         null
     );
     const [modalPacienteAbierto, setModalPacienteAbierto] = useState(false);
+    const [cargandoDatos, setCargandoDatos] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [errorCarga, setErrorCarga] = useState("");
+
+    async function cargarPacientes() {
+        setCargandoDatos(true);
+        setErrorCarga("");
+
+        try {
+            const listaSupabase = await listarPacientesSupabase();
+            const lista = listaSupabase.map(convertirPacienteSupabase);
+
+            setPacientes(lista);
+            setCuentasCobrar(leerCuentasPorCobrarGuardadas());
+            setPacienteSeleccionadoId((seleccionadoActual) => {
+                if (lista.some((paciente) => paciente.id === seleccionadoActual)) {
+                    return seleccionadoActual;
+                }
+
+                return lista[0]?.id || "";
+            });
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudieron cargar los pacientes desde Supabase.";
+
+            setErrorCarga(mensaje);
+        } finally {
+            setCargandoDatos(false);
+        }
+    }
 
     useEffect(() => {
-        const lista = leerPacientesGuardados();
-
-        setPacientes(lista);
-        setCuentasCobrar(leerCuentasPorCobrarGuardadas());
-        setPacienteSeleccionadoId(lista[0]?.id || "");
+        cargarPacientes();
     }, []);
-
-    function guardarListaPacientes(nuevaLista: Paciente[]) {
-        setPacientes(nuevaLista);
-        localStorage.setItem(PACIENTES_KEY, JSON.stringify(nuevaLista));
-        setCuentasCobrar(leerCuentasPorCobrarGuardadas());
-    }
 
     function actualizarCampo<K extends keyof FormularioPaciente>(
         campo: K,
@@ -384,7 +362,7 @@ export default function PacientesPage() {
         limpiarFormulario();
     }
 
-    function guardarPaciente(event: FormEvent<HTMLFormElement>) {
+    async function guardarPaciente(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!formulario.nombre.trim()) {
@@ -397,55 +375,58 @@ export default function PacientesPage() {
             return;
         }
 
-        if (pacienteEditandoId) {
-            const nuevaLista = pacientes.map((paciente) =>
-                paciente.id === pacienteEditandoId
-                    ? {
-                        ...paciente,
-                        nombre: formulario.nombre.trim(),
-                        telefono: formulario.telefono.trim(),
-                        cedula: formulario.cedula.trim(),
-                        fechaNacimiento: formulario.fechaNacimiento,
-                        direccion: formulario.direccion.trim(),
-                        alergias: formulario.alergias.trim() || "No refiere",
-                        enfermedades:
-                            formulario.enfermedades.trim() || "No refiere",
-                        medicamentos:
-                            formulario.medicamentos.trim() || "No refiere",
-                        observaciones: formulario.observaciones.trim(),
-                    }
-                    : paciente
-            );
+        setGuardando(true);
 
-            guardarListaPacientes(nuevaLista);
-            setPacienteSeleccionadoId(pacienteEditandoId);
+        try {
+            const datosPaciente = {
+                nombre: formulario.nombre.trim(),
+                telefono: formulario.telefono.trim(),
+                whatsapp: formulario.telefono.trim(),
+                cedula: formulario.cedula.trim(),
+                fecha_nacimiento: formulario.fechaNacimiento,
+                direccion: formulario.direccion.trim(),
+                alergias: formulario.alergias.trim() || "No refiere",
+                enfermedades_sistemicas:
+                    formulario.enfermedades.trim() || "No refiere",
+                medicamentos_actuales:
+                    formulario.medicamentos.trim() || "No refiere",
+                observaciones: formulario.observaciones.trim(),
+                estado:
+                    pacientes.find((paciente) => paciente.id === pacienteEditandoId)
+                        ?.estado || "Activo",
+            };
+
+            if (pacienteEditandoId) {
+                const pacienteActualizado = await actualizarPacienteSupabase(
+                    pacienteEditandoId,
+                    datosPaciente
+                );
+
+                await cargarPacientes();
+                setPacienteSeleccionadoId(pacienteActualizado.id);
+                cerrarModalPaciente();
+
+                alert("Paciente actualizado correctamente.");
+                return;
+            }
+
+            const nuevoPaciente = await crearPacienteSupabase(datosPaciente);
+
+            await cargarPacientes();
+            setPacienteSeleccionadoId(nuevoPaciente.id);
             cerrarModalPaciente();
 
-            alert("Paciente actualizado correctamente.");
-            return;
+            alert("Paciente registrado correctamente.");
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo guardar el paciente.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
         }
-
-        const nuevoPaciente: Paciente = {
-            id: Date.now().toString(),
-            nombre: formulario.nombre.trim(),
-            telefono: formulario.telefono.trim(),
-            cedula: formulario.cedula.trim(),
-            fechaNacimiento: formulario.fechaNacimiento,
-            direccion: formulario.direccion.trim(),
-            alergias: formulario.alergias.trim() || "No refiere",
-            enfermedades: formulario.enfermedades.trim() || "No refiere",
-            medicamentos: formulario.medicamentos.trim() || "No refiere",
-            observaciones: formulario.observaciones.trim(),
-            estado: "Activo",
-            saldoPendiente: 0,
-            ultimaCita: "",
-        };
-
-        guardarListaPacientes([nuevoPaciente, ...pacientes]);
-        setPacienteSeleccionadoId(nuevoPaciente.id);
-        cerrarModalPaciente();
-
-        alert("Paciente registrado correctamente.");
     }
 
     function editarPaciente(paciente: Paciente) {
@@ -464,7 +445,10 @@ export default function PacientesPage() {
         setModalPacienteAbierto(true);
     }
 
-    function cambiarEstadoPaciente(paciente: Paciente) {
+    async function cambiarEstadoPaciente(paciente: Paciente) {
+        const nuevoEstado: EstadoRegistroClinico =
+            paciente.estado === "Activo" ? "Inactivo" : "Activo";
+
         const confirmar = window.confirm(
             `¿Seguro que deseas ${paciente.estado === "Activo" ? "desactivar" : "activar"
             } este paciente?`
@@ -472,28 +456,29 @@ export default function PacientesPage() {
 
         if (!confirmar) return;
 
-        const nuevaLista = pacientes.map((item) =>
-            item.id === paciente.id
-                ? {
-                    ...item,
-                    estado: item.estado === "Activo" ? "Inactivo" : "Activo",
-                }
-                : item
-        );
+        try {
+            await cambiarEstadoPacienteSupabase(paciente.id, nuevoEstado);
+            await cargarPacientes();
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo cambiar el estado del paciente.";
 
-        guardarListaPacientes(nuevaLista);
+            alert(mensaje);
+        }
     }
 
     const pacientesFiltrados = useMemo(() => {
-        const texto = busqueda.toLowerCase().trim();
+        const texto = normalizarTexto(busqueda);
 
         return pacientes.filter((paciente) => {
             const coincideTexto =
                 !texto ||
-                paciente.nombre.toLowerCase().includes(texto) ||
-                paciente.telefono.toLowerCase().includes(texto) ||
-                paciente.cedula.toLowerCase().includes(texto) ||
-                paciente.direccion.toLowerCase().includes(texto);
+                normalizarTexto(paciente.nombre).includes(texto) ||
+                normalizarTexto(paciente.telefono).includes(texto) ||
+                normalizarTexto(paciente.cedula).includes(texto) ||
+                normalizarTexto(paciente.direccion).includes(texto);
 
             const coincideEstado =
                 filtroEstado === "Todos" || paciente.estado === filtroEstado;
@@ -525,9 +510,33 @@ export default function PacientesPage() {
     return (
         <AppShell
             titulo="Pacientes"
-            descripcion="Directorio clínico limpio, búsqueda rápida y acceso al expediente"
+            descripcion="Directorio clínico limpio, búsqueda rápida y acceso al expediente conectado con Supabase"
             moduloActivo="Pacientes"
         >
+            {cargandoDatos && (
+                <section className="mb-4 rounded-2xl border border-teal-100 bg-teal-50 px-5 py-4">
+                    <p className="flex items-center gap-2 text-sm font-black text-teal-800">
+                        <HeartPulse className="h-4 w-4 animate-pulse" />
+                        Cargando pacientes desde Supabase...
+                    </p>
+                </section>
+            )}
+
+            {errorCarga && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudieron cargar los pacientes
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {errorCarga}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
             <section className="rounded-[28px] border border-white bg-white/80 p-5 shadow-[0_16px_45px_rgba(15,23,42,0.06)]">
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                     <div>
@@ -546,6 +555,7 @@ export default function PacientesPage() {
                     <button
                         type="button"
                         onClick={abrirModalNuevoPaciente}
+                        disabled={cargandoDatos || guardando}
                         className="flex w-full items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-[13px] font-black text-white shadow-sm hover:bg-slate-800 lg:w-fit"
                     >
                         <Plus className="h-4 w-4" />
@@ -623,7 +633,7 @@ export default function PacientesPage() {
                                 value={filtroEstado}
                                 onChange={(event) =>
                                     setFiltroEstado(
-                                        event.target.value as "Todos" | "Activo" | "Inactivo"
+                                        event.target.value as "Todos" | EstadoRegistroClinico
                                     )
                                 }
                                 className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-semibold outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
@@ -694,16 +704,16 @@ export default function PacientesPage() {
                                                 setPacienteSeleccionadoId(paciente.id)
                                             }
                                             className={`cursor-pointer border-b border-slate-100 ${seleccionado
-                                                    ? "bg-teal-50/70"
-                                                    : "hover:bg-slate-50"
+                                                ? "bg-teal-50/70"
+                                                : "hover:bg-slate-50"
                                                 }`}
                                         >
                                             <td className="px-5 py-4">
                                                 <div className="flex items-center gap-3">
                                                     <div
                                                         className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl text-[12px] font-black text-white ${seleccionado
-                                                                ? "bg-teal-600"
-                                                                : "bg-slate-900"
+                                                            ? "bg-teal-600"
+                                                            : "bg-slate-900"
                                                             }`}
                                                     >
                                                         {iniciales(paciente.nombre)}
@@ -829,15 +839,15 @@ export default function PacientesPage() {
                                         setPacienteSeleccionadoId(paciente.id)
                                     }
                                     className={`rounded-2xl border p-4 text-left ${seleccionado
-                                            ? "border-teal-200 bg-teal-50/70"
-                                            : "border-slate-100 bg-white"
+                                        ? "border-teal-200 bg-teal-50/70"
+                                        : "border-slate-100 bg-white"
                                         }`}
                                 >
                                     <div className="flex items-start gap-3">
                                         <div
                                             className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl text-[12px] font-black text-white ${seleccionado
-                                                    ? "bg-teal-600"
-                                                    : "bg-slate-900"
+                                                ? "bg-teal-600"
+                                                : "bg-slate-900"
                                                 }`}
                                         >
                                             {iniciales(paciente.nombre)}
@@ -1098,6 +1108,7 @@ export default function PacientesPage() {
                             <button
                                 type="button"
                                 onClick={cerrarModalPaciente}
+                                disabled={guardando}
                                 className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 hover:bg-slate-200"
                             >
                                 <X className="h-5 w-5" />
@@ -1266,12 +1277,15 @@ export default function PacientesPage() {
 
                                 <button
                                     type="submit"
+                                    disabled={guardando}
                                     className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800"
                                 >
                                     <Plus className="h-4 w-4" />
-                                    {pacienteEditandoId
-                                        ? "Guardar cambios"
-                                        : "Registrar paciente"}
+                                    {guardando
+                                        ? "Guardando..."
+                                        : pacienteEditandoId
+                                            ? "Guardar cambios"
+                                            : "Registrar paciente"}
                                 </button>
                             </div>
                         </form>

@@ -5,13 +5,12 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
     BadgeDollarSign,
     Banknote,
-    CalendarClock,
     CheckCircle2,
     CreditCard,
     FileText,
     Package,
-    Plus,
     ReceiptText,
+    RefreshCcw,
     RotateCcw,
     Search,
     ShieldAlert,
@@ -27,23 +26,36 @@ import {
     obtenerConfiguracionClinica,
     POSClinica,
 } from "@/lib/configuracionClinica";
+import {
+    cambiarEstadoCitaSupabase,
+    listarCitasSupabase,
+    type CitaSupabase,
+    type EstadoCitaSupabase,
+} from "@/lib/supabase/citas";
+import {
+    anularCuentaCobrarSupabase,
+    anularVentaSupabase,
+    listarCuentasCobrarSupabase,
+    listarVentasSupabase,
+    registrarAbonoCuentaSupabase,
+    registrarVentaSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    descontarStockProductoVentaSupabase,
+    listarProductosActivosVentaSupabase,
+    revertirSalidaInventarioPorReferenciaSupabase,
+    type ProductoInventarioSupabase,
+} from "@/lib/supabase/inventario";
 
 type UsuarioSistema = {
     usuario: string;
     nombre: string;
     rol: string;
 };
-
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cobrada"
-    | "Reagendada"
-    | "Cancelada"
-    | "No asistió";
 
 type Cita = {
     id: string;
@@ -57,12 +69,10 @@ type Cita = {
     fecha: string;
     hora: string;
     recurrencia: string;
-    estado: EstadoCita;
+    estado: EstadoCitaSupabase;
     observaciones: string;
     creadaEn: string;
 };
-
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
 
 type Venta = {
     id: string;
@@ -78,12 +88,9 @@ type Venta = {
     tarjeta: number;
     transferencia: number;
     credito: number;
-    estado: EstadoVenta;
+    estado: EstadoVentaSupabase;
     usuarioNombre: string;
     observaciones: string;
-    productoId?: string;
-    productoNombre?: string;
-    cantidadProducto?: number;
     posId?: string;
     posNombre?: string;
     posBanco?: string;
@@ -93,8 +100,6 @@ type Venta = {
 };
 
 type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia" | "Mixto";
-
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
 
 type AbonoCuenta = {
     id: string;
@@ -120,10 +125,11 @@ type CuentaPorCobrar = {
     pacienteNombre: string;
     concepto: string;
     total: number;
+    abonado: number;
     saldo: number;
     fecha: string;
     fechaVencimiento: string;
-    estado: EstadoCuenta;
+    estado: EstadoCuentaCobrarSupabase;
     abonos: AbonoCuenta[];
 };
 
@@ -280,7 +286,7 @@ function horaActualLocal() {
     return `${hours}:${minutes}`;
 }
 
-function numero(valor: string | number) {
+function numero(valor: string | number | null | undefined) {
     const convertido = Number(valor || 0);
 
     if (Number.isNaN(convertido)) return 0;
@@ -288,23 +294,129 @@ function numero(valor: string | number) {
     return convertido;
 }
 
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
+}
+
 function formatoMoneda(valor: number, simbolo = "C$") {
     return `${simbolo} ${(valor || 0).toLocaleString("es-NI")}`;
 }
 
-function colorEstadoVenta(estado: EstadoVenta) {
+function normalizarTexto(valor: unknown) {
+    return String(valor || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " ");
+}
+
+function colorEstadoVenta(estado: EstadoVentaSupabase) {
     if (estado === "Pagada") return "bg-emerald-50 text-emerald-700";
     if (estado === "Parcial") return "bg-amber-50 text-amber-700";
     if (estado === "Crédito") return "bg-blue-50 text-blue-700";
     return "bg-red-50 text-red-700";
 }
 
-function colorEstadoCuenta(estado: EstadoCuenta) {
+function colorEstadoCuenta(estado: EstadoCuentaCobrarSupabase) {
     if (estado === "Pagada") return "bg-emerald-50 text-emerald-700";
     if (estado === "Parcial") return "bg-amber-50 text-amber-700";
     if (estado === "Pendiente") return "bg-blue-50 text-blue-700";
     if (estado === "Vencida") return "bg-red-50 text-red-700";
     return "bg-slate-100 text-slate-500";
+}
+
+function leerLocalStorage<T>(clave: string, valorInicial: T): T {
+    if (typeof window === "undefined") return valorInicial;
+
+    try {
+        const datos = localStorage.getItem(clave);
+        if (!datos) return valorInicial;
+
+        return JSON.parse(datos) as T;
+    } catch {
+        return valorInicial;
+    }
+}
+
+function convertirCita(cita: CitaSupabase): Cita {
+    return {
+        id: cita.id,
+        pacienteId: cita.paciente_id || "",
+        pacienteNombre: cita.paciente_nombre || "",
+        doctorId: cita.doctor_id || "",
+        doctorNombre: cita.doctor_nombre || "",
+        servicioId: cita.servicio_id || "",
+        servicioNombre: cita.servicio_nombre || "",
+        costo: Number(cita.costo || 0),
+        fecha: cita.fecha,
+        hora: horaCorta(cita.hora),
+        recurrencia: cita.recurrencia || "No repetir",
+        estado: cita.estado || "Programada",
+        observaciones: cita.observaciones || "",
+        creadaEn: cita.creado_en || "",
+    };
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha,
+        hora: horaCorta(venta.hora),
+        tipoCobro: venta.tipo_cobro || "Venta",
+        citaId: venta.cita_id || "",
+        pacienteId: venta.paciente_id || "",
+        clienteNombre: venta.cliente_nombre || "",
+        concepto: venta.concepto || "",
+        total: Number(venta.total || 0),
+        efectivo: Number(venta.efectivo || 0),
+        tarjeta: Number(venta.tarjeta || 0),
+        transferencia: Number(venta.transferencia || 0),
+        credito: Number(venta.credito || 0),
+        estado: venta.estado || "Pagada",
+        usuarioNombre: venta.usuario_nombre || "",
+        observaciones: venta.observaciones || "",
+        posId: venta.pos_id || "",
+        posNombre: venta.pos_nombre || "",
+        posBanco: venta.pos_banco || "",
+        posComision: Number(venta.comision_pos_porcentaje || 0),
+        comisionTarjeta: Number(venta.comision_pos_monto || 0),
+        netoTarjeta: Number(venta.neto_tarjeta || 0),
+    };
+}
+
+function convertirCuenta(cuenta: CuentaCobrarSupabase): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        abonado: Number(cuenta.abonado || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+        abonos: [],
+    };
+}
+
+function convertirProducto(producto: ProductoInventarioSupabase): Producto {
+    return {
+        id: producto.id,
+        codigo: producto.codigo || "",
+        nombre: producto.nombre || "",
+        categoria: producto.categoria || "",
+        unidad: producto.unidad || "",
+        stock: Number(producto.stock || 0),
+        stockMinimo: Number(producto.stock_minimo || 0),
+        costoCompra: Number(producto.costo_compra || 0),
+        precioVenta: Number(producto.precio_venta || 0),
+        proveedor: producto.proveedor || "",
+        vencimiento: producto.vencimiento || "",
+        estado: producto.estado || "Activo",
+    };
 }
 
 export default function CajaPage() {
@@ -328,82 +440,73 @@ export default function CajaPage() {
     const [busquedaCuentaAbono, setBusquedaCuentaAbono] = useState("");
     const [modalCobroAbierto, setModalCobroAbierto] = useState(false);
     const [modalAbonoAbierto, setModalAbonoAbierto] = useState(false);
+    const [cargando, setCargando] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState("");
+
+    const posesActivos: POSClinica[] = (configuracion.poses || []).filter(
+        (pos) => pos.activo
+    );
+
+    const posPredeterminadoId = posesActivos[0]?.id || "";
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+            if (usuarioGuardado) {
+                setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
+            }
+
+            const configuracionActual = obtenerConfiguracionClinica();
+            const posInicial =
+                (configuracionActual.poses || []).find((pos) => pos.activo) ||
+                (configuracionActual.poses || [])[0];
+
+            setConfiguracion(configuracionActual);
+            setFormulario((datosActuales) => ({
+                ...datosActuales,
+                posId: datosActuales.posId || posInicial?.id || "",
+            }));
+            setFormularioAbono((datosActuales) => ({
+                ...datosActuales,
+                posId: datosActuales.posId || posInicial?.id || "",
+            }));
+
+            const [
+                citasSupabase,
+                ventasSupabase,
+                cuentasSupabase,
+                productosSupabase,
+            ] = await Promise.all([
+                listarCitasSupabase(),
+                listarVentasSupabase(),
+                listarCuentasCobrarSupabase(),
+                listarProductosActivosVentaSupabase(),
+            ]);
+
+            setCitas(citasSupabase.map(convertirCita));
+            setVentas(ventasSupabase.map(convertirVenta));
+            setCuentas(cuentasSupabase.map(convertirCuenta));
+            setProductos(productosSupabase.map(convertirProducto));
+            setMovimientos([]);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar caja desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
-        const citasGuardadas = localStorage.getItem("citas_sistema_clinico");
-        const ventasGuardadas = localStorage.getItem("ventas_sistema_clinico");
-        const cuentasGuardadas = localStorage.getItem(
-            "cuentas_cobrar_sistema_clinico"
-        );
-        const productosGuardados = localStorage.getItem("productos_sistema_clinico");
-        const movimientosGuardados = localStorage.getItem(
-            "movimientos_inventario_sistema_clinico"
-        );
-
-        if (usuarioGuardado) {
-            setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
-        }
-
-        const configuracionActual = obtenerConfiguracionClinica();
-        const posInicial =
-            (configuracionActual.poses || []).find((pos) => pos.activo) ||
-            (configuracionActual.poses || [])[0];
-
-        setConfiguracion(configuracionActual);
-        setFormulario((datosActuales) => ({
-            ...datosActuales,
-            posId: datosActuales.posId || posInicial?.id || "",
-        }));
-        setFormularioAbono((datosActuales) => ({
-            ...datosActuales,
-            posId: datosActuales.posId || posInicial?.id || "",
-        }));
-
-        if (citasGuardadas) {
-            setCitas(JSON.parse(citasGuardadas) as Cita[]);
-        }
-
-        if (ventasGuardadas) {
-            setVentas(JSON.parse(ventasGuardadas) as Venta[]);
-        }
-
-        if (cuentasGuardadas) {
-            setCuentas(JSON.parse(cuentasGuardadas) as CuentaPorCobrar[]);
-        }
-
-        if (productosGuardados) {
-            setProductos(JSON.parse(productosGuardados) as Producto[]);
-        } else {
-            setProductos(productosIniciales);
-            localStorage.setItem(
-                "productos_sistema_clinico",
-                JSON.stringify(productosIniciales)
-            );
-        }
-
-        if (movimientosGuardados) {
-            setMovimientos(JSON.parse(movimientosGuardados) as MovimientoInventario[]);
-        }
+        cargarDatos();
     }, []);
-
-    function guardarCitas(nuevaLista: Cita[]) {
-        setCitas(nuevaLista);
-        localStorage.setItem("citas_sistema_clinico", JSON.stringify(nuevaLista));
-    }
-
-    function guardarVentas(nuevaLista: Venta[]) {
-        setVentas(nuevaLista);
-        localStorage.setItem("ventas_sistema_clinico", JSON.stringify(nuevaLista));
-    }
-
-    function guardarCuentas(nuevaLista: CuentaPorCobrar[]) {
-        setCuentas(nuevaLista);
-        localStorage.setItem(
-            "cuentas_cobrar_sistema_clinico",
-            JSON.stringify(nuevaLista)
-        );
-    }
 
     function guardarProductos(nuevaLista: Producto[]) {
         setProductos(nuevaLista);
@@ -490,12 +593,12 @@ export default function CajaPage() {
     function cambiarCantidadProducto(valor: string) {
         const cantidad = numero(valor);
         const producto = productos.find((item) => item.id === formulario.productoId);
-        const total = producto ? producto.precioVenta * cantidad : 0;
+        const totalProducto = producto ? producto.precioVenta * cantidad : 0;
 
         setFormulario((datosActuales) => ({
             ...datosActuales,
             cantidadProducto: valor,
-            total: total > 0 ? total.toString() : "",
+            total: totalProducto > 0 ? totalProducto.toString() : "",
         }));
     }
 
@@ -504,12 +607,6 @@ export default function CajaPage() {
     const tarjeta = numero(formulario.tarjeta);
     const credito = numero(formulario.credito);
     const transferenciaReal = numero(formulario.transferencia);
-
-    const posesActivos: POSClinica[] = (configuracion.poses || []).filter(
-        (pos) => pos.activo
-    );
-
-    const posPredeterminadoId = posesActivos[0]?.id || "";
 
     const posSeleccionado =
         posesActivos.find((pos) => pos.id === formulario.posId) ||
@@ -531,10 +628,14 @@ export default function CajaPage() {
     const posAbonoSeleccionado =
         posesActivos.find((pos) => pos.id === formularioAbono.posId) ||
         (tarjetaAbono > 0 ? posesActivos[0] : null);
-    const comisionAbonoTarjeta = tarjetaAbono * ((posAbonoSeleccionado?.comision || 0) / 100);
+    const comisionAbonoTarjeta =
+        tarjetaAbono * ((posAbonoSeleccionado?.comision || 0) / 100);
     const netoAbonoTarjeta = tarjetaAbono - comisionAbonoTarjeta;
-    const cuentaAbonoActual = cuentas.find((item) => item.id === formularioAbono.cuentaId) || null;
-    const diferenciaAbono = cuentaAbonoActual ? cuentaAbonoActual.saldo - montoAbono : 0;
+    const cuentaAbonoActual =
+        cuentas.find((item) => item.id === formularioAbono.cuentaId) || null;
+    const diferenciaAbono = cuentaAbonoActual
+        ? cuentaAbonoActual.saldo - montoAbono
+        : 0;
 
     const productoSeleccionado = productos.find(
         (item) => item.id === formulario.productoId
@@ -559,19 +660,19 @@ export default function CajaPage() {
     }, [citas, ventas]);
 
     const citasPendientesFiltradas = useMemo(() => {
-        const texto = busquedaCitaCobro.toLowerCase().trim();
+        const texto = normalizarTexto(busquedaCitaCobro);
 
         const lista = citasPendientesCobro.filter((cita) => {
             if (!texto) return true;
 
             return (
-                (cita.pacienteNombre || "").toLowerCase().includes(texto) ||
-                (cita.servicioNombre || "").toLowerCase().includes(texto) ||
-                (cita.doctorNombre || "").toLowerCase().includes(texto) ||
-                (cita.fecha || "").toLowerCase().includes(texto) ||
-                (cita.hora || "").toLowerCase().includes(texto) ||
-                (cita.estado || "").toLowerCase().includes(texto) ||
-                (cita.id || "").toLowerCase().includes(texto)
+                normalizarTexto(cita.pacienteNombre).includes(texto) ||
+                normalizarTexto(cita.servicioNombre).includes(texto) ||
+                normalizarTexto(cita.doctorNombre).includes(texto) ||
+                normalizarTexto(cita.fecha).includes(texto) ||
+                normalizarTexto(cita.hora).includes(texto) ||
+                normalizarTexto(cita.estado).includes(texto) ||
+                normalizarTexto(cita.id).includes(texto)
             );
         });
 
@@ -580,10 +681,12 @@ export default function CajaPage() {
 
     const productosVenta = productos.filter(
         (producto) =>
-            producto.estado === "Activo" && producto.precioVenta > 0 && producto.stock > 0
+            producto.estado === "Activo" &&
+            producto.precioVenta > 0 &&
+            producto.stock > 0
     );
 
-    function registrarCobro(event: FormEvent<HTMLFormElement>) {
+    async function registrarCobro(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!formulario.clienteNombre.trim() && formulario.tipoCobro !== "Producto") {
@@ -602,7 +705,9 @@ export default function CajaPage() {
         }
 
         if (Math.abs(diferencia) > 0.01) {
-            alert("La suma de efectivo, tarjeta, transferencia y crédito debe coincidir con el total.");
+            alert(
+                "La suma de efectivo, tarjeta, transferencia y crédito debe coincidir con el total."
+            );
             return;
         }
 
@@ -635,132 +740,71 @@ export default function CajaPage() {
             }
         }
 
-        let estadoVenta: EstadoVenta = "Pagada";
+        setGuardando(true);
 
-        if (credito > 0 && pagadoAhora > 0) {
-            estadoVenta = "Parcial";
-        }
-
-        if (credito > 0 && pagadoAhora === 0) {
-            estadoVenta = "Crédito";
-        }
-
-        const fecha = fechaHoyLocal();
-        const hora = horaActualLocal();
-        const ventaId = `VENTA-${Date.now()}`;
-        const cuentaId = credito > 0 ? `CXC-${Date.now()}` : "";
-
-        const nuevaVenta: Venta = {
-            id: ventaId,
-            fecha,
-            hora,
-            tipoCobro: formulario.tipoCobro,
-            citaId: formulario.citaId,
-            pacienteId: formulario.pacienteId,
-            clienteNombre:
-                formulario.clienteNombre.trim() ||
-                productoSeleccionado?.nombre ||
-                "Cliente general",
-            concepto: formulario.concepto.trim(),
-            total,
-            efectivo,
-            tarjeta,
-            transferencia: transferenciaReal,
-            credito,
-            estado: estadoVenta,
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            observaciones: formulario.observaciones.trim(),
-            productoId: formulario.productoId,
-            productoNombre: productoSeleccionado?.nombre || "",
-            cantidadProducto: numero(formulario.cantidadProducto),
-            posId: tarjeta > 0 ? posSeleccionado?.id || "" : "",
-            posNombre: tarjeta > 0 ? posSeleccionado?.nombre || "" : "",
-            posBanco: tarjeta > 0 ? posSeleccionado?.banco || "" : "",
-            posComision: tarjeta > 0 ? comisionPOSAplicada : 0,
-            comisionTarjeta,
-            netoTarjeta,
-        };
-
-        guardarVentas([nuevaVenta, ...ventas]);
-
-        if (credito > 0) {
-            const nuevaCuenta: CuentaPorCobrar = {
-                id: cuentaId,
-                ventaId,
-                pacienteId: formulario.pacienteId,
-                pacienteNombre:
+        try {
+            const resultado = await registrarVentaSupabase({
+                tipo_cobro: formulario.tipoCobro,
+                cita_id: formulario.citaId || null,
+                paciente_id: formulario.pacienteId || null,
+                cliente_nombre:
                     formulario.clienteNombre.trim() ||
                     productoSeleccionado?.nombre ||
                     "Cliente general",
                 concepto: formulario.concepto.trim(),
-                total: credito,
-                saldo: credito,
-                fecha,
-                fechaVencimiento: formulario.fechaVencimiento,
-                estado: pagadoAhora > 0 ? "Parcial" : "Pendiente",
-                abonos: [],
-            };
+                total,
+                efectivo,
+                tarjeta,
+                transferencia: transferenciaReal,
+                credito,
+                metodo_pago: "",
+                pos_id: tarjeta > 0 ? posSeleccionado?.id || null : null,
+                pos_nombre: tarjeta > 0 ? posSeleccionado?.nombre || "" : "",
+                pos_banco: tarjeta > 0 ? posSeleccionado?.banco || "" : "",
+                comision_pos_porcentaje: tarjeta > 0 ? comisionPOSAplicada : 0,
+                fecha_vencimiento_credito: formulario.fechaVencimiento,
+                observaciones: formulario.observaciones.trim(),
+                usuario_nombre: usuario?.nombre || "Usuario no identificado",
+            });
 
-            guardarCuentas([nuevaCuenta, ...cuentas]);
+            if (formulario.citaId && credito > 0) {
+                await cambiarEstadoCitaSupabase(formulario.citaId, "Atendida");
+            }
+
+            if (formulario.tipoCobro === "Producto" && productoSeleccionado) {
+                const cantidad = numero(formulario.cantidadProducto);
+
+                await descontarStockProductoVentaSupabase(
+                    productoSeleccionado.id,
+                    cantidad,
+                    `Venta registrada en caja. Venta: ${resultado.venta.id}`,
+                    resultado.venta.id
+                );
+            }
+
+            setFormulario({
+                ...formularioCajaVacio,
+                posId: posPredeterminadoId,
+            });
+            setBusquedaCitaCobro("");
+            setModalCobroAbierto(false);
+
+            await cargarDatos();
+
+            alert("Cobro registrado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo registrar el cobro.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
         }
-
-        if (formulario.citaId) {
-            const nuevasCitas = citas.map((cita) =>
-                cita.id === formulario.citaId
-                    ? {
-                        ...cita,
-                        estado: credito > 0 ? ("Atendida" as EstadoCita) : ("Cobrada" as EstadoCita),
-                    }
-                    : cita
-            );
-
-            guardarCitas(nuevasCitas);
-        }
-
-        if (formulario.tipoCobro === "Producto" && productoSeleccionado) {
-            const cantidad = numero(formulario.cantidadProducto);
-            const stockAnterior = productoSeleccionado.stock;
-            const stockNuevo = productoSeleccionado.stock - cantidad;
-
-            const nuevosProductos = productos.map((producto) =>
-                producto.id === productoSeleccionado.id
-                    ? {
-                        ...producto,
-                        stock: stockNuevo,
-                    }
-                    : producto
-            );
-
-            guardarProductos(nuevosProductos);
-
-            const nuevoMovimiento: MovimientoInventario = {
-                id: `MOV-${Date.now()}`,
-                fecha,
-                hora,
-                productoId: productoSeleccionado.id,
-                productoNombre: productoSeleccionado.nombre,
-                tipo: "Salida",
-                cantidad,
-                stockAnterior,
-                stockNuevo,
-                costoUnitario: productoSeleccionado.costoCompra,
-                motivo: `Venta registrada en caja. Venta: ${ventaId}`,
-                usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            };
-
-            guardarMovimientos([nuevoMovimiento, ...movimientos]);
-        }
-
-        setFormulario({
-            ...formularioCajaVacio,
-            posId: posPredeterminadoId,
-        });
-        setBusquedaCitaCobro("");
-        setModalCobroAbierto(false);
-        alert("Cobro registrado correctamente.");
     }
 
-    function registrarAbono(event: FormEvent<HTMLFormElement>) {
+    async function registrarAbono(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         const cuenta = cuentas.find((item) => item.id === formularioAbono.cuentaId);
@@ -785,190 +829,97 @@ export default function CajaPage() {
             return;
         }
 
-        const fecha = fechaHoyLocal();
-        const hora = horaActualLocal();
-        const ventaId = `ABONO-${Date.now()}`;
-        const nuevoSaldo = cuenta.saldo - montoAbono;
+        setGuardando(true);
 
-        const metodosUsados: MetodoPago[] = [];
-        if (efectivoAbono > 0) metodosUsados.push("Efectivo");
-        if (tarjetaAbono > 0) metodosUsados.push("Tarjeta");
-        if (transferenciaAbono > 0) metodosUsados.push("Transferencia");
+        try {
+            await registrarAbonoCuentaSupabase({
+                cuenta_id: cuenta.id,
+                paciente_id: cuenta.pacienteId || null,
+                efectivo: efectivoAbono,
+                tarjeta: tarjetaAbono,
+                transferencia: transferenciaAbono,
+                pos_id: tarjetaAbono > 0 ? posAbonoSeleccionado?.id || null : null,
+                pos_nombre: tarjetaAbono > 0 ? posAbonoSeleccionado?.nombre || "" : "",
+                pos_banco: tarjetaAbono > 0 ? posAbonoSeleccionado?.banco || "" : "",
+                comision_pos_porcentaje:
+                    tarjetaAbono > 0 ? posAbonoSeleccionado?.comision || 0 : 0,
+                usuario_nombre: usuario?.nombre || "Usuario no identificado",
+                observaciones: `Abono aplicado a cuenta ${cuenta.id}`,
+            });
 
-        const metodoAbono: MetodoPago =
-            metodosUsados.length > 1 ? "Mixto" : metodosUsados[0] || "Efectivo";
+            setFormularioAbono({
+                ...formularioAbonoVacio,
+                posId: posPredeterminadoId,
+            });
+            setBusquedaCuentaAbono("");
+            setModalAbonoAbierto(false);
 
-        const detalleMetodo = [
-            efectivoAbono > 0
-                ? `Efectivo ${formatoMoneda(efectivoAbono, configuracion.simboloMoneda)}`
-                : "",
-            tarjetaAbono > 0
-                ? `Tarjeta ${formatoMoneda(tarjetaAbono, configuracion.simboloMoneda)}`
-                : "",
-            transferenciaAbono > 0
-                ? `Transferencia ${formatoMoneda(transferenciaAbono, configuracion.simboloMoneda)}`
-                : "",
-        ]
-            .filter(Boolean)
-            .join(" · ");
+            await cargarDatos();
 
-        const nuevaVenta: Venta = {
-            id: ventaId,
-            fecha,
-            hora,
-            tipoCobro: "Abono a crédito",
-            citaId: "",
-            pacienteId: cuenta.pacienteId,
-            clienteNombre: cuenta.pacienteNombre,
-            concepto: `Abono a ${cuenta.concepto}`,
-            total: montoAbono,
-            efectivo: efectivoAbono,
-            tarjeta: tarjetaAbono,
-            transferencia: transferenciaAbono,
-            credito: 0,
-            estado: "Pagada",
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            observaciones: `Abono aplicado a cuenta ${cuenta.id}. ${detalleMetodo}`,
-            productoId: "",
-            productoNombre: "",
-            cantidadProducto: 0,
-            posId: tarjetaAbono > 0 ? posAbonoSeleccionado?.id || "" : "",
-            posNombre: tarjetaAbono > 0 ? posAbonoSeleccionado?.nombre || "" : "",
-            posBanco: tarjetaAbono > 0 ? posAbonoSeleccionado?.banco || "" : "",
-            posComision: tarjetaAbono > 0 ? posAbonoSeleccionado?.comision || 0 : 0,
-            comisionTarjeta: comisionAbonoTarjeta,
-            netoTarjeta: netoAbonoTarjeta,
-        };
+            alert("Abono registrado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo registrar el abono.";
 
-        const nuevoAbono: AbonoCuenta = {
-            id: `ABONO-CXC-${Date.now()}`,
-            fecha,
-            hora,
-            monto: montoAbono,
-            metodo: metodoAbono,
-            efectivo: efectivoAbono,
-            tarjeta: tarjetaAbono,
-            transferencia: transferenciaAbono,
-            posId: tarjetaAbono > 0 ? posAbonoSeleccionado?.id || "" : "",
-            posNombre: tarjetaAbono > 0 ? posAbonoSeleccionado?.nombre || "" : "",
-            posBanco: tarjetaAbono > 0 ? posAbonoSeleccionado?.banco || "" : "",
-            posComision: tarjetaAbono > 0 ? posAbonoSeleccionado?.comision || 0 : 0,
-            comisionTarjeta: comisionAbonoTarjeta,
-            netoTarjeta: netoAbonoTarjeta,
-        };
-
-        const nuevasCuentas = cuentas.map((item) =>
-            item.id === cuenta.id
-                ? {
-                    ...item,
-                    saldo: nuevoSaldo,
-                    estado:
-                        nuevoSaldo <= 0
-                            ? ("Pagada" as EstadoCuenta)
-                            : ("Parcial" as EstadoCuenta),
-                    abonos: [nuevoAbono, ...(item.abonos || [])],
-                }
-                : item
-        );
-
-        guardarVentas([nuevaVenta, ...ventas]);
-        guardarCuentas(nuevasCuentas);
-        setFormularioAbono({
-            ...formularioAbonoVacio,
-            posId: posPredeterminadoId,
-        });
-        setBusquedaCuentaAbono("");
-        setModalAbonoAbierto(false);
-
-        alert("Abono registrado correctamente.");
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
-    function anularVenta(venta: Venta) {
+    async function anularVenta(venta: Venta) {
         if (venta.estado === "Anulada") return;
 
         const confirmar = window.confirm(
-            "¿Seguro que deseas anular esta venta? Si era producto, el stock se devolverá."
+            "¿Seguro que deseas anular esta venta? Si tenía crédito, también se anulará la cuenta por cobrar relacionada."
         );
 
         if (!confirmar) return;
 
-        const fecha = fechaHoyLocal();
-        const hora = horaActualLocal();
+        setGuardando(true);
 
-        const nuevasVentas = ventas.map((item) =>
-            item.id === venta.id
-                ? {
-                    ...item,
-                    estado: "Anulada" as EstadoVenta,
-                }
-                : item
-        );
+        try {
+            await anularVentaSupabase(venta.id);
 
-        guardarVentas(nuevasVentas);
-
-        const nuevasCuentas = cuentas.map((cuenta) =>
-            cuenta.ventaId === venta.id
-                ? {
-                    ...cuenta,
-                    estado: "Anulada" as EstadoCuenta,
-                    saldo: 0,
-                }
-                : cuenta
-        );
-
-        guardarCuentas(nuevasCuentas);
-
-        if (venta.citaId) {
-            const nuevasCitas = citas.map((cita) =>
-                cita.id === venta.citaId
-                    ? {
-                        ...cita,
-                        estado: "Atendida" as EstadoCita,
-                    }
-                    : cita
+            const cuentaRelacionada = cuentas.find(
+                (cuenta) => cuenta.ventaId === venta.id && cuenta.estado !== "Anulada"
             );
 
-            guardarCitas(nuevasCitas);
-        }
-
-        if (venta.productoId && venta.cantidadProducto && venta.cantidadProducto > 0) {
-            const producto = productos.find((item) => item.id === venta.productoId);
-
-            if (producto) {
-                const stockAnterior = producto.stock;
-                const stockNuevo = producto.stock + (venta.cantidadProducto || 0);
-
-                const nuevosProductos = productos.map((item) =>
-                    item.id === producto.id
-                        ? {
-                            ...item,
-                            stock: stockNuevo,
-                        }
-                        : item
-                );
-
-                guardarProductos(nuevosProductos);
-
-                const nuevoMovimiento: MovimientoInventario = {
-                    id: `MOV-${Date.now()}`,
-                    fecha,
-                    hora,
-                    productoId: producto.id,
-                    productoNombre: producto.nombre,
-                    tipo: "Entrada",
-                    cantidad: venta.cantidadProducto || 0,
-                    stockAnterior,
-                    stockNuevo,
-                    costoUnitario: producto.costoCompra,
-                    motivo: `Devolución automática por anulación de venta ${venta.id}`,
-                    usuarioNombre: usuario?.nombre || "Usuario no identificado",
-                };
-
-                guardarMovimientos([nuevoMovimiento, ...movimientos]);
+            if (cuentaRelacionada) {
+                await anularCuentaCobrarSupabase(cuentaRelacionada.id);
             }
-        }
 
-        alert("Venta anulada correctamente.");
+            if (venta.citaId) {
+                await cambiarEstadoCitaSupabase(venta.citaId, "Atendida");
+            }
+
+            if (venta.tipoCobro === "Producto") {
+                try {
+                    await revertirSalidaInventarioPorReferenciaSupabase(
+                        venta.id,
+                        `Reversión de stock por anulación de venta ${venta.id}`,
+                        usuario?.nombre || "Usuario no identificado"
+                    );
+                } catch {
+                    // No bloqueamos la anulación si no encontramos movimiento de inventario.
+                }
+            }
+
+            await cargarDatos();
+
+            alert("Venta anulada correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo anular la venta.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
     const hoy = fechaHoyLocal();
@@ -1046,15 +997,15 @@ export default function CajaPage() {
 
     const cuentasPendientesFiltradas = cuentasPendientes
         .filter((cuenta) => {
-            const texto = busquedaCuentaAbono.toLowerCase().trim();
+            const texto = normalizarTexto(busquedaCuentaAbono);
 
             if (!texto) return true;
 
             return (
-                (cuenta.pacienteNombre || "").toLowerCase().includes(texto) ||
-                (cuenta.concepto || "").toLowerCase().includes(texto) ||
-                (cuenta.id || "").toLowerCase().includes(texto) ||
-                (cuenta.ventaId || "").toLowerCase().includes(texto)
+                normalizarTexto(cuenta.pacienteNombre).includes(texto) ||
+                normalizarTexto(cuenta.concepto).includes(texto) ||
+                normalizarTexto(cuenta.id).includes(texto) ||
+                normalizarTexto(cuenta.ventaId).includes(texto)
             );
         })
         .slice(0, 8);
@@ -1067,18 +1018,18 @@ export default function CajaPage() {
     );
 
     const ventasFiltradas = ventas.filter((venta) => {
-        const texto = busqueda.toLowerCase().trim();
+        const texto = normalizarTexto(busqueda);
 
         if (!texto) return true;
 
         return (
-            venta.clienteNombre.toLowerCase().includes(texto) ||
-            venta.concepto.toLowerCase().includes(texto) ||
-            venta.tipoCobro.toLowerCase().includes(texto) ||
-            venta.estado.toLowerCase().includes(texto) ||
-            venta.id.toLowerCase().includes(texto) ||
-            (venta.posNombre || "").toLowerCase().includes(texto) ||
-            (venta.posBanco || "").toLowerCase().includes(texto)
+            normalizarTexto(venta.clienteNombre).includes(texto) ||
+            normalizarTexto(venta.concepto).includes(texto) ||
+            normalizarTexto(venta.tipoCobro).includes(texto) ||
+            normalizarTexto(venta.estado).includes(texto) ||
+            normalizarTexto(venta.id).includes(texto) ||
+            normalizarTexto(venta.posNombre).includes(texto) ||
+            normalizarTexto(venta.posBanco).includes(texto)
         );
     });
 
@@ -1088,6 +1039,43 @@ export default function CajaPage() {
             descripcion="Punto de venta, cobros, productos, créditos, abonos, recibos y anulaciones"
             moduloActivo="Caja y Venta"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar caja
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Caja conectada a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Ventas, cuentas por cobrar, abonos e inventario ya trabajan con Supabase.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando || guardando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    Recargar
+                </button>
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
                     <div className="flex items-start justify-between">
@@ -1205,16 +1193,28 @@ export default function CajaPage() {
 
                             <div className="mt-5 grid gap-2 sm:grid-cols-3">
                                 <div className="rounded-2xl bg-white p-3 shadow-sm">
-                                    <p className="text-[10px] font-bold text-slate-400">Citas pendientes</p>
-                                    <p className="mt-1 text-lg font-black text-teal-700">{citasPendientesCobro.length}</p>
+                                    <p className="text-[10px] font-bold text-slate-400">
+                                        Citas pendientes
+                                    </p>
+                                    <p className="mt-1 text-lg font-black text-teal-700">
+                                        {citasPendientesCobro.length}
+                                    </p>
                                 </div>
                                 <div className="rounded-2xl bg-white p-3 shadow-sm">
-                                    <p className="text-[10px] font-bold text-slate-400">Productos</p>
-                                    <p className="mt-1 text-lg font-black text-slate-800">{productosVenta.length}</p>
+                                    <p className="text-[10px] font-bold text-slate-400">
+                                        Productos
+                                    </p>
+                                    <p className="mt-1 text-lg font-black text-slate-800">
+                                        {productosVenta.length}
+                                    </p>
                                 </div>
                                 <div className="rounded-2xl bg-white p-3 shadow-sm">
-                                    <p className="text-[10px] font-bold text-slate-400">POS activos</p>
-                                    <p className="mt-1 text-lg font-black text-blue-700">{posesActivos.length}</p>
+                                    <p className="text-[10px] font-bold text-slate-400">
+                                        POS activos
+                                    </p>
+                                    <p className="mt-1 text-lg font-black text-blue-700">
+                                        {posesActivos.length}
+                                    </p>
                                 </div>
                             </div>
                         </button>
@@ -1242,11 +1242,17 @@ export default function CajaPage() {
 
                             <div className="mt-5 grid gap-2 sm:grid-cols-2">
                                 <div className="rounded-2xl bg-white p-3 shadow-sm">
-                                    <p className="text-[10px] font-bold text-slate-400">Cuentas pendientes</p>
-                                    <p className="mt-1 text-lg font-black text-amber-700">{cuentasPendientes.length}</p>
+                                    <p className="text-[10px] font-bold text-slate-400">
+                                        Cuentas pendientes
+                                    </p>
+                                    <p className="mt-1 text-lg font-black text-amber-700">
+                                        {cuentasPendientes.length}
+                                    </p>
                                 </div>
                                 <div className="rounded-2xl bg-white p-3 shadow-sm">
-                                    <p className="text-[10px] font-bold text-slate-400">Saldo total</p>
+                                    <p className="text-[10px] font-bold text-slate-400">
+                                        Saldo total
+                                    </p>
                                     <p className="mt-1 text-lg font-black text-rose-700">
                                         {formatoMoneda(saldoPendiente, configuracion.simboloMoneda)}
                                     </p>
@@ -1263,42 +1269,54 @@ export default function CajaPage() {
 
                     <div className="mt-4 space-y-3">
                         <div className="flex items-center justify-between rounded-xl bg-emerald-50 px-4 py-3">
-                            <span className="text-[11px] font-medium text-emerald-700">Efectivo</span>
+                            <span className="text-[11px] font-medium text-emerald-700">
+                                Efectivo
+                            </span>
                             <strong className="mono text-[12px] text-emerald-700">
                                 {formatoMoneda(efectivoHoy, configuracion.simboloMoneda)}
                             </strong>
                         </div>
 
                         <div className="flex items-center justify-between rounded-xl bg-blue-50 px-4 py-3">
-                            <span className="text-[11px] font-medium text-blue-700">Tarjeta</span>
+                            <span className="text-[11px] font-medium text-blue-700">
+                                Tarjeta
+                            </span>
                             <strong className="mono text-[12px] text-blue-700">
                                 {formatoMoneda(tarjetaHoy, configuracion.simboloMoneda)}
                             </strong>
                         </div>
 
                         <div className="flex items-center justify-between rounded-xl bg-indigo-50 px-4 py-3">
-                            <span className="text-[11px] font-medium text-indigo-700">Transferencia</span>
+                            <span className="text-[11px] font-medium text-indigo-700">
+                                Transferencia
+                            </span>
                             <strong className="mono text-[12px] text-indigo-700">
                                 {formatoMoneda(transferenciaHoy, configuracion.simboloMoneda)}
                             </strong>
                         </div>
 
                         <div className="flex items-center justify-between rounded-xl bg-amber-50 px-4 py-3">
-                            <span className="text-[11px] font-medium text-amber-700">Crédito generado</span>
+                            <span className="text-[11px] font-medium text-amber-700">
+                                Crédito generado
+                            </span>
                             <strong className="mono text-[12px] text-amber-700">
                                 {formatoMoneda(creditoHoy, configuracion.simboloMoneda)}
                             </strong>
                         </div>
 
                         <div className="flex items-center justify-between rounded-xl bg-rose-50 px-4 py-3">
-                            <span className="text-[11px] font-medium text-rose-700">Comisión POS</span>
+                            <span className="text-[11px] font-medium text-rose-700">
+                                Comisión POS
+                            </span>
                             <strong className="mono text-[12px] text-rose-700">
                                 {formatoMoneda(comisionTarjetaHoy, configuracion.simboloMoneda)}
                             </strong>
                         </div>
 
                         <div className="flex items-center justify-between rounded-xl bg-slate-900 px-4 py-3">
-                            <span className="text-[11px] font-medium text-white/70">Total bruto</span>
+                            <span className="text-[11px] font-medium text-white/70">
+                                Total bruto
+                            </span>
                             <strong className="mono text-[12px] text-white">
                                 {formatoMoneda(totalBrutoHoy, configuracion.simboloMoneda)}
                             </strong>
@@ -1309,21 +1327,24 @@ export default function CajaPage() {
 
             {resumenTarjetasPorPOS.length > 0 && (
                 <section className="mt-4 glass-card rounded-3xl p-5">
-                    <div className="flex items-center justify-between gap-3">
-                        <div>
-                            <h3 className="text-[16px] font-black text-slate-800">
-                                Tarjetas por POS
-                            </h3>
-                            <p className="mt-1 text-xs text-slate-500">
-                                Resumen de bancos, comisión y neto recibido.
-                            </p>
-                        </div>
+                    <div>
+                        <h3 className="text-[16px] font-black text-slate-800">
+                            Tarjetas por POS
+                        </h3>
+                        <p className="mt-1 text-xs text-slate-500">
+                            Resumen de bancos, comisión y neto recibido.
+                        </p>
                     </div>
 
                     <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                         {resumenTarjetasPorPOS.map((pos) => (
-                            <div key={pos.id} className="rounded-2xl border border-blue-100 bg-blue-50 p-4">
-                                <p className="text-sm font-black text-slate-800">{pos.nombre}</p>
+                            <div
+                                key={pos.id}
+                                className="rounded-2xl border border-blue-100 bg-blue-50 p-4"
+                            >
+                                <p className="text-sm font-black text-slate-800">
+                                    {pos.nombre}
+                                </p>
                                 <p className="mt-0.5 text-xs text-slate-500">
                                     {pos.banco} · {pos.comision}%
                                 </p>
@@ -1362,7 +1383,7 @@ export default function CajaPage() {
                                 Historial de ventas
                             </h3>
                             <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                Ventas, créditos, productos, abonos y anulaciones
+                                Ventas, créditos, abonos y anulaciones
                             </p>
                         </div>
 
@@ -1379,7 +1400,7 @@ export default function CajaPage() {
                 </div>
 
                 <div className="overflow-x-auto">
-                    <table className="w-full min-w-[1280px]">
+                    <table className="w-full min-w-[1180px]">
                         <thead>
                             <tr className="border-b border-black/[0.04]">
                                 {[
@@ -1390,7 +1411,6 @@ export default function CajaPage() {
                                     "Pagos",
                                     "Crédito",
                                     "POS",
-                                    "Producto",
                                     "Estado",
                                     "Acciones",
                                 ].map((titulo) => (
@@ -1412,7 +1432,10 @@ export default function CajaPage() {
                                     (venta.transferencia || 0);
 
                                 return (
-                                    <tr key={venta.id} className="border-b border-black/[0.03]">
+                                    <tr
+                                        key={venta.id}
+                                        className="border-b border-black/[0.03]"
+                                    >
                                         <td className="px-6 py-4">
                                             <p className="text-[12px] font-bold text-slate-700">
                                                 {venta.fecha}
@@ -1459,14 +1482,10 @@ export default function CajaPage() {
                                                     </p>
                                                 </div>
                                             ) : (
-                                                <span className="text-[12px] text-slate-400">No aplica</span>
+                                                <span className="text-[12px] text-slate-400">
+                                                    No aplica
+                                                </span>
                                             )}
-                                        </td>
-
-                                        <td className="px-4 py-4 text-[12px] text-slate-500">
-                                            {venta.productoNombre
-                                                ? `${venta.productoNombre} x ${venta.cantidadProducto || 1}`
-                                                : "No aplica"}
                                         </td>
 
                                         <td className="px-4 py-4">
@@ -1491,8 +1510,10 @@ export default function CajaPage() {
 
                                                 {venta.estado !== "Anulada" ? (
                                                     <button
+                                                        type="button"
+                                                        disabled={guardando}
                                                         onClick={() => anularVenta(venta)}
-                                                        className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100"
+                                                        className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100 disabled:opacity-60"
                                                     >
                                                         <Trash2 className="h-3.5 w-3.5" />
                                                         Anular
@@ -1511,8 +1532,13 @@ export default function CajaPage() {
 
                             {ventasFiltradas.length === 0 && (
                                 <tr>
-                                    <td colSpan={10} className="px-6 py-10 text-center text-[12px] text-slate-400">
-                                        No hay ventas registradas o no coinciden con la búsqueda.
+                                    <td
+                                        colSpan={9}
+                                        className="px-6 py-10 text-center text-[12px] text-slate-400"
+                                    >
+                                        {cargando
+                                            ? "Cargando ventas..."
+                                            : "No hay ventas registradas o no coinciden con la búsqueda."}
                                     </td>
                                 </tr>
                             )}
@@ -1533,7 +1559,10 @@ export default function CajaPage() {
 
                 <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
                     {cuentas.map((cuenta) => (
-                        <div key={cuenta.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                        <div
+                            key={cuenta.id}
+                            className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm"
+                        >
                             <div className="flex items-start justify-between gap-3">
                                 <div>
                                     <h4 className="text-sm font-black text-slate-800">
@@ -1553,16 +1582,29 @@ export default function CajaPage() {
                                 </span>
                             </div>
 
-                            <div className="mt-4 grid grid-cols-2 gap-3">
+                            <div className="mt-4 grid grid-cols-3 gap-3">
                                 <div className="rounded-xl bg-slate-50 p-3">
-                                    <p className="text-[10px] font-bold text-slate-400">Total</p>
+                                    <p className="text-[10px] font-bold text-slate-400">
+                                        Total
+                                    </p>
                                     <p className="mt-1 text-xs font-black text-slate-800">
                                         {formatoMoneda(cuenta.total, configuracion.simboloMoneda)}
                                     </p>
                                 </div>
 
+                                <div className="rounded-xl bg-emerald-50 p-3">
+                                    <p className="text-[10px] font-bold text-emerald-700">
+                                        Abonado
+                                    </p>
+                                    <p className="mt-1 text-xs font-black text-emerald-700">
+                                        {formatoMoneda(cuenta.abonado, configuracion.simboloMoneda)}
+                                    </p>
+                                </div>
+
                                 <div className="rounded-xl bg-amber-50 p-3">
-                                    <p className="text-[10px] font-bold text-amber-700">Saldo</p>
+                                    <p className="text-[10px] font-bold text-amber-700">
+                                        Saldo
+                                    </p>
                                     <p className="mt-1 text-xs font-black text-amber-700">
                                         {formatoMoneda(cuenta.saldo, configuracion.simboloMoneda)}
                                     </p>
@@ -1611,7 +1653,10 @@ export default function CajaPage() {
                             </button>
                         </div>
 
-                        <form onSubmit={registrarCobro} className="max-h-[calc(92vh-92px)] overflow-y-auto p-6">
+                        <form
+                            onSubmit={registrarCobro}
+                            className="max-h-[calc(92vh-92px)] overflow-y-auto p-6"
+                        >
                             <div className="grid gap-5 xl:grid-cols-[0.95fr_1.05fr]">
                                 <div className="rounded-3xl border border-slate-100 bg-slate-50/70 p-5">
                                     <div className="mb-2 flex items-center justify-between gap-2">
@@ -1663,8 +1708,8 @@ export default function CajaPage() {
                                                     type="button"
                                                     onClick={() => seleccionarCita(cita.id)}
                                                     className={`mb-2 w-full rounded-xl border p-3 text-left last:mb-0 ${seleccionada
-                                                            ? "border-teal-200 bg-teal-50"
-                                                            : "border-slate-100 bg-white hover:border-slate-200"
+                                                        ? "border-teal-200 bg-teal-50"
+                                                        : "border-slate-100 bg-white hover:border-slate-200"
                                                         }`}
                                                 >
                                                     <div className="flex items-start justify-between gap-3">
@@ -1699,7 +1744,7 @@ export default function CajaPage() {
 
                                     {citaSeleccionadaCobro && (
                                         <p className="mt-3 rounded-xl bg-teal-50 px-3 py-2 text-[11px] font-bold text-teal-700">
-                                            Cita seleccionada: {citaSeleccionadaCobro.pacienteNombre} · {" "}
+                                            Cita seleccionada: {citaSeleccionadaCobro.pacienteNombre} ·{" "}
                                             {citaSeleccionadaCobro.servicioNombre}
                                         </p>
                                     )}
@@ -1713,7 +1758,9 @@ export default function CajaPage() {
                                             </label>
                                             <select
                                                 value={formulario.tipoCobro}
-                                                onChange={(event) => actualizarCampo("tipoCobro", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("tipoCobro", event.target.value)
+                                                }
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                             >
                                                 <option>Consulta</option>
@@ -1731,7 +1778,9 @@ export default function CajaPage() {
                                             </label>
                                             <input
                                                 value={formulario.total}
-                                                onChange={(event) => actualizarCampo("total", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("total", event.target.value)
+                                                }
                                                 type="number"
                                                 placeholder="0.00"
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
@@ -1755,14 +1804,19 @@ export default function CajaPage() {
                                                     </label>
                                                     <select
                                                         value={formulario.productoId}
-                                                        onChange={(event) => seleccionarProducto(event.target.value)}
+                                                        onChange={(event) =>
+                                                            seleccionarProducto(event.target.value)
+                                                        }
                                                         className="w-full rounded-2xl border border-teal-100 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                                     >
                                                         <option value="">Seleccionar producto</option>
                                                         {productosVenta.map((producto) => (
                                                             <option key={producto.id} value={producto.id}>
-                                                                {producto.nombre} · Stock {producto.stock} · {" "}
-                                                                {formatoMoneda(producto.precioVenta, configuracion.simboloMoneda)}
+                                                                {producto.nombre} · Stock {producto.stock} ·{" "}
+                                                                {formatoMoneda(
+                                                                    producto.precioVenta,
+                                                                    configuracion.simboloMoneda
+                                                                )}
                                                             </option>
                                                         ))}
                                                     </select>
@@ -1774,7 +1828,9 @@ export default function CajaPage() {
                                                     </label>
                                                     <input
                                                         value={formulario.cantidadProducto}
-                                                        onChange={(event) => cambiarCantidadProducto(event.target.value)}
+                                                        onChange={(event) =>
+                                                            cambiarCantidadProducto(event.target.value)
+                                                        }
                                                         type="number"
                                                         className="w-full rounded-2xl border border-teal-100 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                                     />
@@ -1784,27 +1840,41 @@ export default function CajaPage() {
                                             {productoSeleccionado && (
                                                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                                                     <div className="rounded-2xl bg-white p-4">
-                                                        <p className="text-[11px] font-bold text-slate-400">Precio unitario</p>
+                                                        <p className="text-[11px] font-bold text-slate-400">
+                                                            Precio unitario
+                                                        </p>
                                                         <p className="mt-1 text-sm font-black text-slate-800">
-                                                            {formatoMoneda(productoSeleccionado.precioVenta, configuracion.simboloMoneda)}
+                                                            {formatoMoneda(
+                                                                productoSeleccionado.precioVenta,
+                                                                configuracion.simboloMoneda
+                                                            )}
                                                         </p>
                                                     </div>
 
                                                     <div className="rounded-2xl bg-white p-4">
-                                                        <p className="text-[11px] font-bold text-slate-400">Stock actual</p>
+                                                        <p className="text-[11px] font-bold text-slate-400">
+                                                            Stock actual
+                                                        </p>
                                                         <p className="mt-1 text-sm font-black text-slate-800">
                                                             {productoSeleccionado.stock}
                                                         </p>
                                                     </div>
 
                                                     <div className="rounded-2xl bg-white p-4">
-                                                        <p className="text-[11px] font-bold text-slate-400">Stock después</p>
+                                                        <p className="text-[11px] font-bold text-slate-400">
+                                                            Stock después
+                                                        </p>
                                                         <p className="mt-1 text-sm font-black text-teal-700">
-                                                            {productoSeleccionado.stock - numero(formulario.cantidadProducto)}
+                                                            {productoSeleccionado.stock -
+                                                                numero(formulario.cantidadProducto)}
                                                         </p>
                                                     </div>
                                                 </div>
                                             )}
+
+                                            <p className="mt-3 rounded-2xl bg-white px-4 py-3 text-[11px] font-bold text-teal-700">
+                                                Nota: inventario conectado a Supabase. Al vender, se descuenta stock real y se registra movimiento automático.
+                                            </p>
                                         </div>
                                     )}
 
@@ -1815,7 +1885,9 @@ export default function CajaPage() {
                                             </label>
                                             <input
                                                 value={formulario.clienteNombre}
-                                                onChange={(event) => actualizarCampo("clienteNombre", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("clienteNombre", event.target.value)
+                                                }
                                                 placeholder="Nombre del paciente o cliente"
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                             />
@@ -1827,7 +1899,9 @@ export default function CajaPage() {
                                             </label>
                                             <input
                                                 value={formulario.concepto}
-                                                onChange={(event) => actualizarCampo("concepto", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("concepto", event.target.value)
+                                                }
                                                 placeholder="Consulta, limpieza, producto..."
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                             />
@@ -1836,30 +1910,42 @@ export default function CajaPage() {
 
                                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
                                         <div>
-                                            <label className="mb-2 block text-xs font-bold text-slate-600">Efectivo</label>
+                                            <label className="mb-2 block text-xs font-bold text-slate-600">
+                                                Efectivo
+                                            </label>
                                             <input
                                                 value={formulario.efectivo}
-                                                onChange={(event) => actualizarCampo("efectivo", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("efectivo", event.target.value)
+                                                }
                                                 type="number"
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="mb-2 block text-xs font-bold text-slate-600">Tarjeta</label>
+                                            <label className="mb-2 block text-xs font-bold text-slate-600">
+                                                Tarjeta
+                                            </label>
                                             <input
                                                 value={formulario.tarjeta}
-                                                onChange={(event) => actualizarCampo("tarjeta", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("tarjeta", event.target.value)
+                                                }
                                                 type="number"
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="mb-2 block text-xs font-bold text-slate-600">POS tarjeta</label>
+                                            <label className="mb-2 block text-xs font-bold text-slate-600">
+                                                POS tarjeta
+                                            </label>
                                             <select
                                                 value={formulario.posId || posPredeterminadoId}
-                                                onChange={(event) => actualizarCampo("posId", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("posId", event.target.value)
+                                                }
                                                 disabled={tarjeta <= 0}
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100 disabled:text-slate-400"
                                             >
@@ -1873,20 +1959,28 @@ export default function CajaPage() {
                                         </div>
 
                                         <div>
-                                            <label className="mb-2 block text-xs font-bold text-slate-600">Transferencia</label>
+                                            <label className="mb-2 block text-xs font-bold text-slate-600">
+                                                Transferencia
+                                            </label>
                                             <input
                                                 value={formulario.transferencia}
-                                                onChange={(event) => actualizarCampo("transferencia", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("transferencia", event.target.value)
+                                                }
                                                 type="number"
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="mb-2 block text-xs font-bold text-slate-600">Crédito</label>
+                                            <label className="mb-2 block text-xs font-bold text-slate-600">
+                                                Crédito
+                                            </label>
                                             <input
                                                 value={formulario.credito}
-                                                onChange={(event) => actualizarCampo("credito", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo("credito", event.target.value)
+                                                }
                                                 type="number"
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                             />
@@ -1900,7 +1994,12 @@ export default function CajaPage() {
                                             </label>
                                             <input
                                                 value={formulario.fechaVencimiento}
-                                                onChange={(event) => actualizarCampo("fechaVencimiento", event.target.value)}
+                                                onChange={(event) =>
+                                                    actualizarCampo(
+                                                        "fechaVencimiento",
+                                                        event.target.value
+                                                    )
+                                                }
                                                 type="date"
                                                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                             />
@@ -1908,10 +2007,14 @@ export default function CajaPage() {
                                     )}
 
                                     <div>
-                                        <label className="mb-2 block text-xs font-bold text-slate-600">Observaciones</label>
+                                        <label className="mb-2 block text-xs font-bold text-slate-600">
+                                            Observaciones
+                                        </label>
                                         <textarea
                                             value={formulario.observaciones}
-                                            onChange={(event) => actualizarCampo("observaciones", event.target.value)}
+                                            onChange={(event) =>
+                                                actualizarCampo("observaciones", event.target.value)
+                                            }
                                             rows={3}
                                             placeholder="Referencia, notas del pago, autorización..."
                                             className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
@@ -1924,31 +2027,52 @@ export default function CajaPage() {
                                 <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
                                     <div className="grid gap-3 md:grid-cols-4">
                                         <div className="rounded-2xl bg-slate-50 p-3">
-                                            <p className="text-[10px] font-bold text-slate-400">Total</p>
+                                            <p className="text-[10px] font-bold text-slate-400">
+                                                Total
+                                            </p>
                                             <p className="mt-1 text-sm font-black text-slate-800">
                                                 {formatoMoneda(total, configuracion.simboloMoneda)}
                                             </p>
                                         </div>
 
                                         <div className="rounded-2xl bg-emerald-50 p-3">
-                                            <p className="text-[10px] font-bold text-emerald-700">Pagado ahora</p>
+                                            <p className="text-[10px] font-bold text-emerald-700">
+                                                Pagado ahora
+                                            </p>
                                             <p className="mt-1 text-sm font-black text-emerald-700">
                                                 {formatoMoneda(pagadoAhora, configuracion.simboloMoneda)}
                                             </p>
                                         </div>
 
                                         <div className="rounded-2xl bg-rose-50 p-3">
-                                            <p className="text-[10px] font-bold text-rose-700">Comisión POS</p>
+                                            <p className="text-[10px] font-bold text-rose-700">
+                                                Comisión POS
+                                            </p>
                                             <p className="mt-1 text-sm font-black text-rose-700">
                                                 {formatoMoneda(comisionTarjeta, configuracion.simboloMoneda)}
                                             </p>
                                         </div>
 
-                                        <div className={`rounded-2xl p-3 ${Math.abs(diferencia) < 0.01 ? "bg-emerald-50" : "bg-rose-50"}`}>
-                                            <p className={`text-[10px] font-bold ${Math.abs(diferencia) < 0.01 ? "text-emerald-700" : "text-rose-700"}`}>
+                                        <div
+                                            className={`rounded-2xl p-3 ${Math.abs(diferencia) < 0.01
+                                                ? "bg-emerald-50"
+                                                : "bg-rose-50"
+                                                }`}
+                                        >
+                                            <p
+                                                className={`text-[10px] font-bold ${Math.abs(diferencia) < 0.01
+                                                    ? "text-emerald-700"
+                                                    : "text-rose-700"
+                                                    }`}
+                                            >
                                                 Diferencia
                                             </p>
-                                            <p className={`mt-1 text-sm font-black ${Math.abs(diferencia) < 0.01 ? "text-emerald-700" : "text-rose-700"}`}>
+                                            <p
+                                                className={`mt-1 text-sm font-black ${Math.abs(diferencia) < 0.01
+                                                    ? "text-emerald-700"
+                                                    : "text-rose-700"
+                                                    }`}
+                                            >
                                                 {formatoMoneda(diferencia, configuracion.simboloMoneda)}
                                             </p>
                                         </div>
@@ -1977,16 +2101,24 @@ export default function CajaPage() {
                                             Limpiar
                                         </button>
 
-                                        <button className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800">
+                                        <button
+                                            disabled={guardando}
+                                            className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
                                             <CheckCircle2 className="h-4 w-4" />
-                                            Registrar cobro
+                                            {guardando ? "Guardando..." : "Registrar cobro"}
                                         </button>
                                     </div>
                                 </div>
 
                                 {tarjeta > 0 && (
                                     <p className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700">
-                                        POS aplicado: {posSeleccionado ? `${posSeleccionado.nombre} · ${posSeleccionado.banco} · ${posSeleccionado.comision}%` : "No seleccionado"} · Neto tarjeta: {formatoMoneda(netoTarjeta, configuracion.simboloMoneda)}
+                                        POS aplicado:{" "}
+                                        {posSeleccionado
+                                            ? `${posSeleccionado.nombre} · ${posSeleccionado.banco} · ${posSeleccionado.comision}%`
+                                            : "No seleccionado"}{" "}
+                                        · Neto tarjeta:{" "}
+                                        {formatoMoneda(netoTarjeta, configuracion.simboloMoneda)}
                                     </p>
                                 )}
                             </div>
@@ -2017,7 +2149,10 @@ export default function CajaPage() {
                             </button>
                         </div>
 
-                        <form onSubmit={registrarAbono} className="max-h-[calc(92vh-92px)] overflow-y-auto p-6">
+                        <form
+                            onSubmit={registrarAbono}
+                            className="max-h-[calc(92vh-92px)] overflow-y-auto p-6"
+                        >
                             <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
                                 <div>
                                     <label className="mb-2 block text-xs font-bold text-slate-600">
@@ -2045,7 +2180,8 @@ export default function CajaPage() {
 
                                     <div className="mt-3 max-h-[330px] overflow-y-auto rounded-2xl border border-slate-100 bg-slate-50 p-2">
                                         {cuentasPendientesFiltradas.map((cuenta) => {
-                                            const seleccionada = formularioAbono.cuentaId === cuenta.id;
+                                            const seleccionada =
+                                                formularioAbono.cuentaId === cuenta.id;
 
                                             return (
                                                 <button
@@ -2056,11 +2192,13 @@ export default function CajaPage() {
                                                             ...datos,
                                                             cuentaId: cuenta.id,
                                                         }));
-                                                        setBusquedaCuentaAbono(`${cuenta.pacienteNombre} · ${cuenta.concepto}`);
+                                                        setBusquedaCuentaAbono(
+                                                            `${cuenta.pacienteNombre} · ${cuenta.concepto}`
+                                                        );
                                                     }}
                                                     className={`mb-2 w-full rounded-xl border p-3 text-left last:mb-0 ${seleccionada
-                                                            ? "border-amber-200 bg-amber-50"
-                                                            : "border-white bg-white hover:border-slate-200"
+                                                        ? "border-amber-200 bg-amber-50"
+                                                        : "border-white bg-white hover:border-slate-200"
                                                         }`}
                                                 >
                                                     <div className="flex items-start justify-between gap-3">
@@ -2101,7 +2239,9 @@ export default function CajaPage() {
 
                                     {cuentaAbonoSeleccionada && (
                                         <div className="mt-3 rounded-2xl bg-white p-4">
-                                            <p className="text-[11px] font-bold text-slate-400">Cuenta seleccionada</p>
+                                            <p className="text-[11px] font-bold text-slate-400">
+                                                Cuenta seleccionada
+                                            </p>
                                             <p className="mt-1 text-sm font-black text-slate-800">
                                                 {cuentaAbonoSeleccionada.pacienteNombre}
                                             </p>
@@ -2109,7 +2249,11 @@ export default function CajaPage() {
                                                 {cuentaAbonoSeleccionada.concepto}
                                             </p>
                                             <p className="mt-2 text-xs font-black text-amber-700">
-                                                Saldo: {formatoMoneda(cuentaAbonoSeleccionada.saldo, configuracion.simboloMoneda)}
+                                                Saldo:{" "}
+                                                {formatoMoneda(
+                                                    cuentaAbonoSeleccionada.saldo,
+                                                    configuracion.simboloMoneda
+                                                )}
                                             </p>
                                         </div>
                                     )}
@@ -2210,44 +2354,65 @@ export default function CajaPage() {
 
                                             <div className="flex items-center justify-between gap-3">
                                                 <span className="text-slate-500">Saldo después</span>
-                                                <strong className={diferenciaAbono < 0 ? "text-rose-600" : "text-amber-700"}>
-                                                    {formatoMoneda(Math.max(diferenciaAbono, 0), configuracion.simboloMoneda)}
+                                                <strong
+                                                    className={
+                                                        diferenciaAbono < 0
+                                                            ? "text-rose-600"
+                                                            : "text-amber-700"
+                                                    }
+                                                >
+                                                    {formatoMoneda(
+                                                        Math.max(diferenciaAbono, 0),
+                                                        configuracion.simboloMoneda
+                                                    )}
                                                 </strong>
                                             </div>
 
                                             {tarjetaAbono > 0 && (
                                                 <>
                                                     <div className="flex items-center justify-between gap-3">
-                                                        <span className="text-slate-500">Comisión POS</span>
+                                                        <span className="text-slate-500">
+                                                            Comisión POS
+                                                        </span>
                                                         <strong className="text-rose-600">
-                                                            {formatoMoneda(comisionAbonoTarjeta, configuracion.simboloMoneda)}
+                                                            {formatoMoneda(
+                                                                comisionAbonoTarjeta,
+                                                                configuracion.simboloMoneda
+                                                            )}
                                                         </strong>
                                                     </div>
 
                                                     <div className="flex items-center justify-between gap-3">
-                                                        <span className="text-slate-500">Neto tarjeta</span>
+                                                        <span className="text-slate-500">
+                                                            Neto tarjeta
+                                                        </span>
                                                         <strong className="text-blue-700">
-                                                            {formatoMoneda(netoAbonoTarjeta, configuracion.simboloMoneda)}
+                                                            {formatoMoneda(
+                                                                netoAbonoTarjeta,
+                                                                configuracion.simboloMoneda
+                                                            )}
                                                         </strong>
                                                     </div>
                                                 </>
                                             )}
                                         </div>
 
-                                        {cuentaAbonoSeleccionada && montoAbono > cuentaAbonoSeleccionada.saldo && (
-                                            <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-[11px] font-bold text-rose-700">
-                                                El abono no puede ser mayor que el saldo pendiente.
-                                            </p>
-                                        )}
+                                        {cuentaAbonoSeleccionada &&
+                                            montoAbono > cuentaAbonoSeleccionada.saldo && (
+                                                <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-[11px] font-bold text-rose-700">
+                                                    El abono no puede ser mayor que el saldo pendiente.
+                                                </p>
+                                            )}
                                     </div>
 
                                     <div className="mt-5 flex flex-col gap-2">
                                         <button
                                             type="submit"
-                                            className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800"
+                                            disabled={guardando}
+                                            className="flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             <BadgeDollarSign className="h-4 w-4" />
-                                            Registrar abono
+                                            {guardando ? "Guardando..." : "Registrar abono"}
                                         </button>
 
                                         <button

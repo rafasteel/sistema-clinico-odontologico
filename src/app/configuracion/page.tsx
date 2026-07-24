@@ -32,6 +32,10 @@ import {
     obtenerConfiguracionClinica,
     POSClinica,
 } from "@/lib/configuracionClinica";
+import {
+    guardarConfiguracionClinicaSupabase,
+    obtenerConfiguracionClinicaSupabase,
+} from "@/lib/supabase/configuracionClinica";
 
 type FormularioConfiguracion = {
     nombreClinica: string;
@@ -133,10 +137,35 @@ export default function ConfiguracionPage() {
         useState<FormularioPOS>(formularioPOSVacio);
 
     const [guardado, setGuardado] = useState(false);
+    const [cargando, setCargando] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState("");
+
+    async function cargarConfiguracion() {
+        setCargando(true);
+        setError("");
+
+        try {
+            const configuracionActual = await obtenerConfiguracionClinicaSupabase();
+            guardarConfiguracionClinica(configuracionActual);
+            setFormulario(convertirAFormulario(configuracionActual));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar la configuración desde Supabase.";
+
+            setError(mensaje);
+
+            const configuracionLocal = obtenerConfiguracionClinica();
+            setFormulario(convertirAFormulario(configuracionLocal));
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const configuracionActual = obtenerConfiguracionClinica();
-        setFormulario(convertirAFormulario(configuracionActual));
+        cargarConfiguracion();
     }, []);
 
     function actualizarCampo<K extends keyof FormularioConfiguracion>(
@@ -337,7 +366,7 @@ export default function ConfiguracionPage() {
         return true;
     }
 
-    function guardarConfiguracion(event: FormEvent<HTMLFormElement>) {
+    async function guardarConfiguracion(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!formulario.nombreClinica.trim()) {
@@ -379,27 +408,66 @@ export default function ConfiguracionPage() {
             mensajeRecibo: formulario.mensajeRecibo.trim(),
         };
 
-        guardarConfiguracionClinica(nuevaConfiguracion);
+        setGuardando(true);
+        setError("");
 
-        setFormulario(convertirAFormulario(nuevaConfiguracion));
-        setGuardado(true);
+        try {
+            const configuracionGuardada =
+                await guardarConfiguracionClinicaSupabase(nuevaConfiguracion);
 
-        alert("Configuración guardada correctamente.");
+            guardarConfiguracionClinica(configuracionGuardada);
+
+            setFormulario(convertirAFormulario(configuracionGuardada));
+            setGuardado(true);
+
+            alert("Configuración guardada correctamente en Supabase.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo guardar la configuración en Supabase.";
+
+            setError(mensaje);
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
-    function restaurarConfiguracion() {
+    async function restaurarConfiguracion() {
         const confirmar = window.confirm(
             "¿Seguro que deseas restaurar la configuración predeterminada?"
         );
 
         if (!confirmar) return;
 
-        guardarConfiguracionClinica(CONFIGURACION_PREDETERMINADA);
-        setFormulario(convertirAFormulario(CONFIGURACION_PREDETERMINADA));
-        setNuevoPOS(formularioPOSVacio);
-        setGuardado(true);
+        setGuardando(true);
+        setError("");
 
-        alert("Configuración predeterminada restaurada.");
+        try {
+            const configuracionGuardada =
+                await guardarConfiguracionClinicaSupabase(
+                    CONFIGURACION_PREDETERMINADA
+                );
+
+            guardarConfiguracionClinica(configuracionGuardada);
+
+            setFormulario(convertirAFormulario(configuracionGuardada));
+            setNuevoPOS(formularioPOSVacio);
+            setGuardado(true);
+
+            alert("Configuración predeterminada restaurada en Supabase.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo restaurar la configuración en Supabase.";
+
+            setError(mensaje);
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
     const ventaEjemplo = 2500;
@@ -418,6 +486,43 @@ export default function ConfiguracionPage() {
             descripcion="Datos de clínica, moneda, POS por banco, contacto y textos para recibos"
             moduloActivo="Configuración General"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo sincronizar la configuración
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Configuración conectada a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Los datos de clínica y POS se guardan por clínica en la base de datos.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarConfiguracion}
+                    disabled={cargando || guardando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RotateCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar"}
+                </button>
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
                     <div className="flex items-start justify-between">
@@ -487,7 +592,7 @@ export default function ConfiguracionPage() {
                         {guardado ? "Guardado" : "Editable"}
                     </h3>
                     <p className="mt-2 text-[12px] font-semibold text-slate-500">
-                        Configuración local
+                        Configuración Supabase
                     </p>
                 </div>
             </section>
@@ -779,8 +884,8 @@ export default function ConfiguracionPage() {
                                                     type="button"
                                                     onClick={() => alternarPOS(pos.id)}
                                                     className={`rounded-xl px-4 py-2 text-[11px] font-black ${pos.activo
-                                                            ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
-                                                            : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+                                                        ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                                                        : "bg-slate-100 text-slate-500 hover:bg-slate-200"
                                                         }`}
                                                 >
                                                     {pos.activo ? "Activo" : "Inactivo"}
@@ -876,15 +981,19 @@ export default function ConfiguracionPage() {
                             </div>
 
                             <div className="mt-5 flex flex-wrap gap-2">
-                                <button className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90">
+                                <button
+                                    disabled={guardando || cargando}
+                                    className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
                                     <Save className="h-4 w-4" />
-                                    Guardar configuración
+                                    {guardando ? "Guardando..." : "Guardar configuración"}
                                 </button>
 
                                 <button
                                     type="button"
                                     onClick={restaurarConfiguracion}
-                                    className="flex items-center gap-2 rounded-xl bg-amber-50 px-5 py-3 text-[12px] font-bold text-amber-700 hover:bg-amber-100"
+                                    disabled={guardando || cargando}
+                                    className="flex items-center gap-2 rounded-xl bg-amber-50 px-5 py-3 text-[12px] font-bold text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <RotateCcw className="h-4 w-4" />
                                     Restaurar predeterminada
@@ -898,12 +1007,10 @@ export default function ConfiguracionPage() {
                             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
                             <div>
                                 <h3 className="text-sm font-black text-amber-800">
-                                    Configuración local
+                                    Configuración Supabase
                                 </h3>
                                 <p className="mt-1 text-xs leading-5 text-amber-700">
-                                    Estos datos se guardan en este navegador. Cuando
-                                    migremos a Supabase, esta configuración se guardará
-                                    en la base de datos real de la clínica.
+                                    Estos datos se guardan en Supabase por clínica. También se sincronizan en este navegador como respaldo para las pantallas que aún usan configuración local.
                                 </p>
                             </div>
                         </div>
@@ -1086,8 +1193,8 @@ export default function ConfiguracionPage() {
                                                     </p>
                                                     <p
                                                         className={`mt-0.5 font-bold ${pos.activo
-                                                                ? "text-emerald-600"
-                                                                : "text-slate-400"
+                                                            ? "text-emerald-600"
+                                                            : "text-slate-400"
                                                             }`}
                                                     >
                                                         {pos.activo

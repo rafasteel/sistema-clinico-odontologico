@@ -12,6 +12,7 @@ import {
     FileText,
     Package,
     ReceiptText,
+    RefreshCcw,
     Search,
     ShieldAlert,
     TrendingDown,
@@ -24,8 +25,35 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
-
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
+import {
+    listarCuentasCobrarSupabase,
+    listarVentasSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    listarGastosSupabase,
+    type EstadoGastoSupabase,
+    type GastoSupabase,
+    type MetodoGastoSupabase,
+} from "@/lib/supabase/gastos";
+import {
+    listarCierresCajaSupabase,
+    type CierreCajaSupabase,
+    type EstadoCierreCajaSupabase,
+} from "@/lib/supabase/cierresCaja";
+import {
+    listarProductosInventarioSupabase,
+    type ProductoInventarioSupabase,
+} from "@/lib/supabase/inventario";
+import {
+    listarComprasProveedoresSupabase,
+    listarCuentasPagarSupabase,
+    type CompraProveedorSupabase,
+    type CuentaPagarSupabase,
+} from "@/lib/supabase/proveedores";
 
 type Venta = {
     id: string;
@@ -41,15 +69,12 @@ type Venta = {
     tarjeta: number;
     transferencia: number;
     credito: number;
-    estado: EstadoVenta;
+    estado: EstadoVentaSupabase;
     usuarioNombre: string;
     observaciones: string;
-    productoId?: string;
-    productoNombre?: string;
-    cantidadProducto?: number;
+    comisionPOS: number;
+    netoTarjeta: number;
 };
-
-type EstadoGasto = "Activo" | "Anulado";
 
 type Gasto = {
     id: string;
@@ -58,14 +83,12 @@ type Gasto = {
     categoria: string;
     descripcion: string;
     monto: number;
-    metodoPago: string;
+    metodoPago: MetodoGastoSupabase;
     proveedor: string;
     usuarioNombre: string;
     observaciones: string;
-    estado: EstadoGasto;
+    estado: EstadoGastoSupabase;
 };
-
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
 
 type CuentaPorCobrar = {
     id: string;
@@ -74,11 +97,11 @@ type CuentaPorCobrar = {
     pacienteNombre: string;
     concepto: string;
     total: number;
+    abonado: number;
     saldo: number;
     fecha: string;
     fechaVencimiento: string;
-    estado: EstadoCuenta;
-    abonos: unknown[];
+    estado: EstadoCuentaCobrarSupabase;
 };
 
 type EstadoCuentaPagar =
@@ -167,7 +190,7 @@ type CierreCaja = {
     diferenciaEfectivo: number;
     diferenciaTarjeta: number;
     diferenciaTransferencia: number;
-    estado: "Cuadrado" | "Con diferencia";
+    estado: EstadoCierreCajaSupabase;
     observaciones: string;
 };
 
@@ -182,6 +205,26 @@ function fechaHoyLocal() {
 
 function mesActualLocal() {
     return fechaHoyLocal().slice(0, 7);
+}
+
+function ultimoDiaMes(mes: string) {
+    const [year, month] = mes.split("-").map(Number);
+    const fecha = new Date(year, month, 0);
+    const day = String(fecha.getDate()).padStart(2, "0");
+
+    return `${mes}-${day}`;
+}
+
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
+}
+
+function numero(valor: unknown) {
+    const convertido = Number(valor || 0);
+
+    if (Number.isNaN(convertido)) return 0;
+
+    return convertido;
 }
 
 function formatoMoneda(valor: number, simbolo = "C$") {
@@ -229,6 +272,161 @@ function estadoVisualCuenta(fechaVencimiento: string, estado: string) {
     return estado;
 }
 
+function normalizarTexto(valor: unknown) {
+    return String(valor || "")
+        .toLowerCase()
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha,
+        hora: horaCorta(venta.hora),
+        tipoCobro: venta.tipo_cobro || "Venta",
+        citaId: venta.cita_id || "",
+        pacienteId: venta.paciente_id || "",
+        clienteNombre: venta.cliente_nombre || "",
+        concepto: venta.concepto || "",
+        total: Number(venta.total || 0),
+        efectivo: Number(venta.efectivo || 0),
+        tarjeta: Number(venta.tarjeta || 0),
+        transferencia: Number(venta.transferencia || 0),
+        credito: Number(venta.credito || 0),
+        estado: venta.estado || "Pagada",
+        usuarioNombre: venta.usuario_nombre || "",
+        observaciones: venta.observaciones || "",
+        comisionPOS: Number(venta.comision_pos_monto || 0),
+        netoTarjeta: Number(venta.neto_tarjeta || 0),
+    };
+}
+
+function convertirGasto(gasto: GastoSupabase): Gasto {
+    return {
+        id: gasto.id,
+        fecha: gasto.fecha,
+        hora: horaCorta(gasto.hora),
+        categoria: gasto.categoria || "",
+        descripcion: gasto.descripcion || "",
+        monto: Number(gasto.monto || 0),
+        metodoPago: gasto.metodo_pago || "Efectivo",
+        proveedor: gasto.proveedor || "",
+        usuarioNombre: gasto.usuario_nombre || "",
+        observaciones: gasto.observaciones || "",
+        estado: gasto.estado || "Activo",
+    };
+}
+
+function convertirCuenta(cuenta: CuentaCobrarSupabase): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        abonado: Number(cuenta.abonado || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+    };
+}
+
+function convertirCierre(cierre: CierreCajaSupabase): CierreCaja {
+    return {
+        id: cierre.id,
+        fecha: cierre.fecha,
+        hora: horaCorta(cierre.hora),
+        usuarioNombre: cierre.usuario_nombre || "",
+        ventasCantidad: Number(cierre.ventas_cantidad || 0),
+        ventasBrutas: Number(cierre.ventas_brutas || 0),
+        efectivoSistema: Number(cierre.efectivo_sistema || 0),
+        tarjetaSistema: Number(cierre.tarjeta_sistema || 0),
+        transferenciaSistema: Number(cierre.transferencia_sistema || 0),
+        creditoGenerado: Number(cierre.credito_generado || 0),
+        gastosEfectivo: Number(cierre.gastos_efectivo || 0),
+        gastosTarjeta: Number(cierre.gastos_tarjeta || 0),
+        gastosTransferencia: Number(cierre.gastos_transferencia || 0),
+        gastosTotal: Number(cierre.gastos_total || 0),
+        comisionPOS: Number(cierre.comision_pos || 0),
+        netoTarjeta: Number(cierre.neto_tarjeta || 0),
+        efectivoEsperado: Number(cierre.efectivo_esperado || 0),
+        efectivoContado: Number(cierre.efectivo_contado || 0),
+        tarjetaReportada: Number(cierre.tarjeta_reportada || 0),
+        transferenciaReportada: Number(cierre.transferencia_reportada || 0),
+        diferenciaEfectivo: Number(cierre.diferencia_efectivo || 0),
+        diferenciaTarjeta: Number(cierre.diferencia_tarjeta || 0),
+        diferenciaTransferencia: Number(cierre.diferencia_transferencia || 0),
+        estado: cierre.estado || "Cuadrado",
+        observaciones: cierre.observaciones || "",
+    };
+}
+
+
+function convertirProductoInventario(
+    producto: ProductoInventarioSupabase
+): Producto {
+    return {
+        id: producto.id,
+        codigo: producto.codigo || "",
+        nombre: producto.nombre || "",
+        categoria: producto.categoria || "",
+        unidad: producto.unidad || "",
+        stock: Number(producto.stock || 0),
+        stockMinimo: Number(producto.stock_minimo || 0),
+        costoCompra: Number(producto.costo_compra || 0),
+        precioVenta: Number(producto.precio_venta || 0),
+        proveedor: producto.proveedor || "",
+        vencimiento: producto.vencimiento || "",
+        estado: producto.estado || "Activo",
+    };
+}
+
+function convertirCuentaPagarSupabase(cuenta: CuentaPagarSupabase): CuentaPorPagar {
+    return {
+        id: cuenta.id,
+        compraId: cuenta.compra_id || "",
+        proveedorId: cuenta.proveedor_id || "",
+        proveedorNombre: cuenta.proveedor_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+        abonos: [],
+    };
+}
+
+function convertirCompraProveedorSupabase(
+    compra: CompraProveedorSupabase
+): CompraProveedor {
+    return {
+        id: compra.id,
+        fecha: compra.fecha,
+        hora: horaCorta(compra.hora),
+        proveedorId: compra.proveedor_id || "",
+        proveedorNombre: compra.proveedor_nombre || "",
+        productoId: compra.producto_id || "",
+        productoNombre: compra.producto_nombre || "",
+        cantidad: Number(compra.cantidad || 0),
+        costoUnitario: Number(compra.costo_unitario || 0),
+        total: Number(compra.total || 0),
+        pagoAhora: Number(compra.pago_ahora || 0),
+        credito: Number(compra.credito || 0),
+        metodoPago: compra.metodo_pago || "Efectivo",
+        fechaVencimiento: compra.fecha_vencimiento || "",
+        estado: compra.estado || "Activa",
+        usuarioNombre: compra.usuario_nombre || "",
+        observaciones: compra.observaciones || "",
+        gastoId: compra.gasto_id || "",
+        cuentaPagarId: compra.cuenta_pagar_id || "",
+    };
+}
+
 export default function ReportesPage() {
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
         CONFIGURACION_PREDETERMINADA
@@ -244,49 +442,60 @@ export default function ReportesPage() {
 
     const [mesSeleccionado, setMesSeleccionado] = useState(mesActualLocal());
     const [busqueda, setBusqueda] = useState("");
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            setConfiguracion(obtenerConfiguracionClinica());
+
+            const fechaInicio = `${mesSeleccionado}-01`;
+            const fechaFin = ultimoDiaMes(mesSeleccionado);
+
+            const [
+                ventasSupabase,
+                gastosSupabase,
+                cuentasCobrarSupabase,
+                cierresSupabase,
+                productosSupabase,
+                comprasSupabase,
+                cuentasPagarSupabase,
+            ] = await Promise.all([
+                listarVentasSupabase(fechaInicio, fechaFin),
+                listarGastosSupabase(mesSeleccionado),
+                listarCuentasCobrarSupabase(),
+                listarCierresCajaSupabase(),
+                listarProductosInventarioSupabase(),
+                listarComprasProveedoresSupabase(mesSeleccionado),
+                listarCuentasPagarSupabase(),
+            ]);
+
+            setVentas(ventasSupabase.map(convertirVenta));
+            setGastos(gastosSupabase.map(convertirGasto));
+            setCuentasCobrar(cuentasCobrarSupabase.map(convertirCuenta));
+            setCierres(cierresSupabase.map(convertirCierre));
+            setProductos(productosSupabase.map(convertirProductoInventario));
+            setCompras(comprasSupabase.map(convertirCompraProveedorSupabase));
+            setCuentasPagar(cuentasPagarSupabase.map(convertirCuentaPagarSupabase));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudieron cargar los reportes financieros desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const ventasGuardadas = localStorage.getItem("ventas_sistema_clinico");
-        const gastosGuardados = localStorage.getItem("gastos_sistema_clinico");
-        const cuentasCobrarGuardadas = localStorage.getItem(
-            "cuentas_cobrar_sistema_clinico"
-        );
-        const cuentasPagarGuardadas = localStorage.getItem(
-            "cuentas_pagar_sistema_clinico"
-        );
-        const productosGuardados = localStorage.getItem("productos_sistema_clinico");
-        const comprasGuardadas = localStorage.getItem(
-            "compras_proveedores_sistema_clinico"
-        );
-        const cierresGuardados = localStorage.getItem(
-            "cierres_caja_sistema_clinico"
-        );
-
-        setConfiguracion(obtenerConfiguracionClinica());
-
-        if (ventasGuardadas) setVentas(JSON.parse(ventasGuardadas) as Venta[]);
-        if (gastosGuardados) setGastos(JSON.parse(gastosGuardados) as Gasto[]);
-
-        if (cuentasCobrarGuardadas) {
-            setCuentasCobrar(JSON.parse(cuentasCobrarGuardadas) as CuentaPorCobrar[]);
-        }
-
-        if (cuentasPagarGuardadas) {
-            setCuentasPagar(JSON.parse(cuentasPagarGuardadas) as CuentaPorPagar[]);
-        }
-
-        if (productosGuardados) {
-            setProductos(JSON.parse(productosGuardados) as Producto[]);
-        }
-
-        if (comprasGuardadas) {
-            setCompras(JSON.parse(comprasGuardadas) as CompraProveedor[]);
-        }
-
-        if (cierresGuardados) {
-            setCierres(JSON.parse(cierresGuardados) as CierreCaja[]);
-        }
-    }, []);
+        cargarDatos();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mesSeleccionado]);
 
     const ventasPeriodo = useMemo(() => {
         return ventas.filter(
@@ -310,7 +519,11 @@ export default function ReportesPage() {
     }, [compras, mesSeleccionado]);
 
     const cierresPeriodo = useMemo(() => {
-        return cierres.filter((cierre) => cierre.fecha.startsWith(mesSeleccionado));
+        return cierres.filter(
+            (cierre) =>
+                cierre.fecha.startsWith(mesSeleccionado) &&
+                cierre.estado !== "Anulado"
+        );
     }, [cierres, mesSeleccionado]);
 
     const ventasBrutas = ventasPeriodo.reduce(
@@ -340,8 +553,15 @@ export default function ReportesPage() {
 
     const ingresosCobrados = efectivo + tarjeta + transferencia;
 
-    const comisionPOS = tarjeta * (configuracion.comisionPOS / 100);
-    const netoTarjeta = tarjeta - comisionPOS;
+    const comisionPOS = ventasPeriodo.reduce(
+        (total, venta) => total + (venta.comisionPOS || 0),
+        0
+    );
+
+    const netoTarjeta = ventasPeriodo.reduce(
+        (total, venta) => total + (venta.netoTarjeta || 0),
+        0
+    );
 
     const gastosTotal = gastosPeriodo.reduce(
         (total, gasto) => total + (gasto.monto || 0),
@@ -393,11 +613,13 @@ export default function ReportesPage() {
     );
 
     const cuentasCobrarVencidas = cuentasCobrarPendientes.filter(
-        (cuenta) => estadoVisualCuenta(cuenta.fechaVencimiento, cuenta.estado) === "Vencida"
+        (cuenta) =>
+            estadoVisualCuenta(cuenta.fechaVencimiento, cuenta.estado) === "Vencida"
     );
 
     const cuentasPagarVencidas = cuentasPagarPendientes.filter(
-        (cuenta) => estadoVisualCuenta(cuenta.fechaVencimiento, cuenta.estado) === "Vencida"
+        (cuenta) =>
+            estadoVisualCuenta(cuenta.fechaVencimiento, cuenta.estado) === "Vencida"
     );
 
     const productosActivos = productos.filter(
@@ -456,15 +678,15 @@ export default function ReportesPage() {
     }, [gastosPeriodo]);
 
     const ventasFiltradas = ventasPeriodo.filter((venta) => {
-        const texto = busqueda.toLowerCase().trim();
+        const texto = normalizarTexto(busqueda);
 
         if (!texto) return true;
 
         return (
-            venta.clienteNombre.toLowerCase().includes(texto) ||
-            venta.concepto.toLowerCase().includes(texto) ||
-            venta.tipoCobro.toLowerCase().includes(texto) ||
-            venta.estado.toLowerCase().includes(texto)
+            normalizarTexto(venta.clienteNombre).includes(texto) ||
+            normalizarTexto(venta.concepto).includes(texto) ||
+            normalizarTexto(venta.tipoCobro).includes(texto) ||
+            normalizarTexto(venta.estado).includes(texto)
         );
     });
 
@@ -472,12 +694,14 @@ export default function ReportesPage() {
         descargarCSV(`reporte-financiero-${mesSeleccionado}.csv`, [
             ["Reporte financiero", mesSeleccionado],
             ["Clínica", configuracion.nombreClinica],
+            ["Fuente principal", "Supabase"],
             [],
             ["Indicador", "Valor"],
             ["Ventas brutas", ventasBrutas.toString()],
             ["Ingresos cobrados", ingresosCobrados.toString()],
             ["Efectivo", efectivo.toString()],
             ["Tarjeta", tarjeta.toString()],
+            ["Neto tarjeta", netoTarjeta.toString()],
             ["Transferencia", transferencia.toString()],
             ["Crédito generado", creditoGenerado.toString()],
             ["Comisión POS", comisionPOS.toString()],
@@ -496,6 +720,22 @@ export default function ReportesPage() {
             descripcion="Resumen de ventas, gastos, créditos, compras, inventario y cierres"
             moduloActivo="Reportes Financieros"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudieron cargar los reportes
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
             {(cuentasCobrarVencidas.length > 0 ||
                 cuentasPagarVencidas.length > 0 ||
                 productosBajoStock.length > 0 ||
@@ -574,7 +814,7 @@ export default function ReportesPage() {
                             Panel financiero del período
                         </h3>
                         <p className="mono mt-0.5 text-[10px] text-slate-400">
-                            Filtra por mes y exporta el resumen financiero
+                            Ventas, gastos, cuentas por cobrar y cierres desde Supabase
                         </p>
                     </div>
 
@@ -585,6 +825,15 @@ export default function ReportesPage() {
                             type="month"
                             className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                         />
+
+                        <button
+                            onClick={cargarDatos}
+                            disabled={cargando}
+                            className="flex items-center justify-center gap-2 rounded-2xl bg-white px-5 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-60"
+                        >
+                            <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                            Recargar
+                        </button>
 
                         <button
                             onClick={exportarResumenCSV}
@@ -839,7 +1088,7 @@ export default function ReportesPage() {
                                 Ventas del período
                             </h3>
                             <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                Historial filtrado por mes
+                                Historial filtrado por mes desde Supabase
                             </p>
 
                             <div className="mt-4 flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
@@ -905,7 +1154,9 @@ export default function ReportesPage() {
                                                             ? "bg-emerald-50 text-emerald-700"
                                                             : venta.estado === "Parcial"
                                                                 ? "bg-amber-50 text-amber-700"
-                                                                : "bg-blue-50 text-blue-700"
+                                                                : venta.estado === "Anulada"
+                                                                    ? "bg-red-50 text-red-700"
+                                                                    : "bg-blue-50 text-blue-700"
                                                         }`}
                                                 >
                                                     {venta.estado}
@@ -920,7 +1171,9 @@ export default function ReportesPage() {
                                                 colSpan={5}
                                                 className="px-6 py-10 text-center text-[12px] text-slate-400"
                                             >
-                                                No hay ventas para este período o búsqueda.
+                                                {cargando
+                                                    ? "Cargando ventas desde Supabase..."
+                                                    : "No hay ventas para este período o búsqueda."}
                                             </td>
                                         </tr>
                                     )}
@@ -1013,7 +1266,7 @@ export default function ReportesPage() {
                                 Compras y proveedores
                             </h3>
                             <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                Compras registradas en el mes
+                                Compras y cuentas por pagar desde Supabase
                             </p>
                         </div>
 
@@ -1055,7 +1308,7 @@ export default function ReportesPage() {
                                 Inventario financiero
                             </h3>
                             <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                Valor actual del almacén
+                                Inventario real leído desde Supabase
                             </p>
                         </div>
 
@@ -1103,7 +1356,7 @@ export default function ReportesPage() {
                                 Cierres de caja
                             </h3>
                             <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                Control del período
+                                Control del período desde Supabase
                             </p>
                         </div>
 

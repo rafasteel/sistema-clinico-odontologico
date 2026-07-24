@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
+    Activity,
     ArrowLeft,
     ArrowRight,
     CalendarDays,
@@ -11,6 +12,7 @@ import {
     Plus,
     RefreshCcw,
     Search,
+    ShieldAlert,
 } from "lucide-react";
 import AppShell from "@/components/AppShell";
 import {
@@ -18,17 +20,11 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
-
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cobrada"
-    | "Reagendada"
-    | "Cancelada"
-    | "No asistió";
+import {
+    listarCitasSupabase,
+    type CitaSupabase,
+    type EstadoCitaSupabase,
+} from "@/lib/supabase/citas";
 
 type Cita = {
     id: string;
@@ -41,8 +37,9 @@ type Cita = {
     costo: number;
     fecha: string;
     hora: string;
+    duracionMinutos: number;
     recurrencia: string;
-    estado: EstadoCita;
+    estado: EstadoCitaSupabase;
     observaciones: string;
     creadaEn: string;
 };
@@ -86,19 +83,6 @@ function inicioSemana(fecha: string) {
     return sumarDias(base, diferencia);
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
 function formatoMoneda(valor: number, simbolo = "C$") {
     return `${simbolo} ${(valor || 0).toLocaleString("es-NI", {
         minimumFractionDigits: 2,
@@ -106,8 +90,12 @@ function formatoMoneda(valor: number, simbolo = "C$") {
     })}`;
 }
 
-function normalizar(texto: string) {
-    return texto.toLowerCase().trim();
+function normalizar(texto: unknown) {
+    return String(texto || "")
+        .toLowerCase()
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
 }
 
 function nombreDia(fecha: string) {
@@ -126,12 +114,17 @@ function mesCorto(fecha: string) {
         .replace(".", "");
 }
 
+function horaCorta(hora: string) {
+    if (!hora) return "";
+    return String(hora).slice(0, 5);
+}
+
 function horaNumero(hora: string) {
     const numero = Number(String(hora || "0").split(":")[0]);
     return Number.isNaN(numero) ? -1 : numero;
 }
 
-function colorEstadoCita(estado: EstadoCita) {
+function colorEstadoCita(estado: EstadoCitaSupabase) {
     if (estado === "Cobrada" || estado === "Atendida") {
         return "border-emerald-200 bg-emerald-50 text-emerald-800";
     }
@@ -155,7 +148,7 @@ function colorEstadoCita(estado: EstadoCita) {
     return "border-amber-200 bg-amber-50 text-amber-800";
 }
 
-function colorEstadoBadge(estado: EstadoCita) {
+function colorEstadoBadge(estado: EstadoCitaSupabase) {
     if (estado === "Cobrada" || estado === "Atendida") {
         return "bg-emerald-50 text-emerald-700";
     }
@@ -175,6 +168,26 @@ function colorEstadoBadge(estado: EstadoCita) {
     return "bg-amber-50 text-amber-700";
 }
 
+function convertirCita(cita: CitaSupabase): Cita {
+    return {
+        id: cita.id,
+        pacienteId: cita.paciente_id || "",
+        pacienteNombre: cita.paciente_nombre || "",
+        doctorId: cita.doctor_id || "",
+        doctorNombre: cita.doctor_nombre || "",
+        servicioId: cita.servicio_id || "",
+        servicioNombre: cita.servicio_nombre || "",
+        costo: Number(cita.costo || 0),
+        fecha: cita.fecha,
+        hora: horaCorta(cita.hora),
+        duracionMinutos: Number(cita.duracion_minutos || 30),
+        recurrencia: cita.recurrencia || "No repetir",
+        estado: cita.estado || "Programada",
+        observaciones: cita.observaciones || "",
+        creadaEn: cita.creado_en || "",
+    };
+}
+
 export default function CalendarioPage() {
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
         CONFIGURACION_PREDETERMINADA
@@ -182,10 +195,29 @@ export default function CalendarioPage() {
     const [citas, setCitas] = useState<Cita[]>([]);
     const [fechaSeleccionada, setFechaSeleccionada] = useState(fechaHoyLocal());
     const [busqueda, setBusqueda] = useState("");
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
 
-    function cargarDatos() {
-        setConfiguracion(obtenerConfiguracionClinica());
-        setCitas(leerLocalStorage<Cita[]>("citas_sistema_clinico", []));
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            setConfiguracion(obtenerConfiguracionClinica());
+
+            const citasSupabase = await listarCitasSupabase();
+
+            setCitas(citasSupabase.map(convertirCita));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudieron cargar las citas desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
     }
 
     useEffect(() => {
@@ -262,6 +294,22 @@ export default function CalendarioPage() {
             descripcion="Vista semanal de citas por día y hora"
             moduloActivo="Calendario"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar el calendario
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
             <section className="glass-card overflow-hidden rounded-3xl">
                 <div className="border-b border-black/[0.04] px-6 py-5">
                     <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -277,11 +325,16 @@ export default function CalendarioPage() {
                                 {tituloSemana} · {citasDiaSeleccionado.length} cita(s) el día
                                 seleccionado
                             </p>
+
+                            <p className="mt-2 text-xs font-semibold text-teal-700">
+                                Calendario conectado a Supabase.
+                            </p>
                         </div>
 
                         <div className="flex flex-col gap-3 md:flex-row md:items-center">
                             <div className="flex items-center gap-2">
                                 <button
+                                    type="button"
                                     onClick={irSemanaAnterior}
                                     className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-slate-700 shadow-sm hover:bg-slate-50"
                                 >
@@ -289,6 +342,7 @@ export default function CalendarioPage() {
                                 </button>
 
                                 <button
+                                    type="button"
                                     onClick={irHoy}
                                     className="rounded-xl bg-slate-900 px-4 py-2.5 text-[12px] font-black text-white hover:bg-slate-800"
                                 >
@@ -296,6 +350,7 @@ export default function CalendarioPage() {
                                 </button>
 
                                 <button
+                                    type="button"
                                     onClick={irSemanaSiguiente}
                                     className="flex h-10 w-10 items-center justify-center rounded-xl bg-white text-slate-700 shadow-sm hover:bg-slate-50"
                                 >
@@ -319,10 +374,14 @@ export default function CalendarioPage() {
                             </Link>
 
                             <button
+                                type="button"
                                 onClick={cargarDatos}
-                                className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                                disabled={cargando}
+                                className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                             >
-                                <RefreshCcw className="h-4 w-4" />
+                                <RefreshCcw
+                                    className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`}
+                                />
                                 Recargar
                             </button>
                         </div>
@@ -339,6 +398,15 @@ export default function CalendarioPage() {
                     </div>
                 </div>
 
+                {cargando && (
+                    <div className="border-b border-teal-100 bg-teal-50 px-6 py-4">
+                        <p className="flex items-center gap-2 text-xs font-black text-teal-700">
+                            <Activity className="h-4 w-4 animate-pulse" />
+                            Cargando citas desde Supabase...
+                        </p>
+                    </div>
+                )}
+
                 <div className="grid gap-0 xl:grid-cols-[1fr_360px]">
                     <div className="overflow-x-auto">
                         <div className="grid min-w-[1060px] grid-cols-[70px_repeat(7,minmax(135px,1fr))]">
@@ -354,6 +422,7 @@ export default function CalendarioPage() {
                                 return (
                                     <button
                                         key={dia.fecha}
+                                        type="button"
                                         onClick={() => setFechaSeleccionada(dia.fecha)}
                                         className={`border-b border-r border-slate-100 p-3 text-left hover:bg-teal-50/50 ${seleccionado ? "bg-teal-50" : "bg-white"
                                             }`}
@@ -423,7 +492,7 @@ export default function CalendarioPage() {
                                                             <div className="flex items-center gap-1.5">
                                                                 <Clock3 className="h-3 w-3" />
                                                                 <span className="mono text-[9px] font-black">
-                                                                    {cita.hora}
+                                                                    {horaCorta(cita.hora)}
                                                                 </span>
                                                             </div>
 
@@ -473,7 +542,7 @@ export default function CalendarioPage() {
                                             <div>
                                                 <div className="flex flex-wrap items-center gap-2">
                                                     <span className="mono rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-500">
-                                                        {cita.hora}
+                                                        {horaCorta(cita.hora)}
                                                     </span>
 
                                                     <span
@@ -509,7 +578,7 @@ export default function CalendarioPage() {
                                     </Link>
                                 ))}
 
-                                {citasDiaSeleccionado.length === 0 && (
+                                {!cargando && citasDiaSeleccionado.length === 0 && (
                                     <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-8 text-center">
                                         <CalendarDays className="mx-auto h-10 w-10 text-slate-300" />
                                         <h4 className="mt-3 text-sm font-black text-slate-700">
@@ -537,11 +606,11 @@ export default function CalendarioPage() {
                                     <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-blue-700" />
                                     <div>
                                         <h4 className="text-sm font-black text-blue-800">
-                                            Calendario limpio
+                                            Calendario conectado
                                         </h4>
                                         <p className="mt-1 text-xs leading-5 text-blue-700">
-                                            Este módulo queda solo para citas, navegación semanal y
-                                            agenda del día.
+                                            Esta vista lee las citas reales guardadas en Supabase y
+                                            se actualiza con el botón Recargar.
                                         </p>
                                     </div>
                                 </div>

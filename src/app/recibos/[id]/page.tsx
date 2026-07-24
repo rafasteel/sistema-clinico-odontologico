@@ -3,14 +3,27 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, FileText, Printer, ReceiptText } from "lucide-react";
+import {
+    ArrowLeft,
+    FileText,
+    Loader2,
+    Printer,
+    ReceiptText,
+} from "lucide-react";
 import {
     ConfiguracionClinica,
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
-
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
+import {
+    listarAbonosCuentaSupabase,
+    listarCuentasCobrarSupabase,
+    obtenerVentaSupabase,
+    type AbonoCuentaSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
 
 type Venta = {
     id: string;
@@ -26,12 +39,9 @@ type Venta = {
     tarjeta: number;
     transferencia: number;
     credito: number;
-    estado: EstadoVenta;
+    estado: EstadoVentaSupabase;
     usuarioNombre: string;
     observaciones: string;
-    productoId?: string;
-    productoNombre?: string;
-    cantidadProducto?: number;
 
     posId?: string;
     posNombre?: string;
@@ -41,7 +51,7 @@ type Venta = {
     netoTarjeta?: number;
 };
 
-type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia";
+type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia" | "Mixto";
 
 type AbonoCuenta = {
     id: string;
@@ -62,28 +72,13 @@ type CuentaPorCobrar = {
     pacienteNombre: string;
     concepto: string;
     total: number;
+    abonado: number;
     saldo: number;
     fecha: string;
     fechaVencimiento: string;
     estado: EstadoCuenta;
     abonos: AbonoCuenta[];
 };
-
-const VENTAS_KEY = "ventas_sistema_clinico";
-const CUENTAS_KEY = "cuentas_cobrar_sistema_clinico";
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
 
 function numero(valor: unknown) {
     const convertido = Number(valor || 0);
@@ -93,6 +88,10 @@ function numero(valor: unknown) {
     return convertido;
 }
 
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
+}
+
 function formatoMoneda(valor: number, simbolo = "C$") {
     return `${simbolo} ${(valor || 0).toLocaleString("es-NI", {
         minimumFractionDigits: 2,
@@ -100,7 +99,7 @@ function formatoMoneda(valor: number, simbolo = "C$") {
     })}`;
 }
 
-function textoEstado(estado: EstadoVenta) {
+function textoEstado(estado: EstadoVentaSupabase) {
     if (estado === "Pagada") return "Pagado";
     if (estado === "Parcial") return "Pago parcial";
     if (estado === "Crédito") return "Crédito pendiente";
@@ -129,6 +128,73 @@ function porcentajePagado(venta: Venta) {
     return Math.min((pagado / venta.total) * 100, 100);
 }
 
+function metodoPago(valor: string): MetodoPago {
+    if (valor === "Efectivo") return "Efectivo";
+    if (valor === "Tarjeta") return "Tarjeta";
+    if (valor === "Transferencia") return "Transferencia";
+
+    return "Mixto";
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha,
+        hora: horaCorta(venta.hora),
+        tipoCobro: venta.tipo_cobro || "Venta",
+        citaId: venta.cita_id || "",
+        pacienteId: venta.paciente_id || "",
+        clienteNombre: venta.cliente_nombre || "",
+        concepto: venta.concepto || "",
+        total: Number(venta.total || 0),
+        efectivo: Number(venta.efectivo || 0),
+        tarjeta: Number(venta.tarjeta || 0),
+        transferencia: Number(venta.transferencia || 0),
+        credito: Number(venta.credito || 0),
+        estado: venta.estado || "Pagada",
+        usuarioNombre: venta.usuario_nombre || "",
+        observaciones: venta.observaciones || "",
+        posId: venta.pos_id || "",
+        posNombre: venta.pos_nombre || "",
+        posBanco: venta.pos_banco || "",
+        comisionPOS: Number(venta.comision_pos_porcentaje || 0),
+        comisionTarjeta: Number(venta.comision_pos_monto || 0),
+        netoTarjeta: Number(venta.neto_tarjeta || 0),
+    };
+}
+
+function convertirAbono(abono: AbonoCuentaSupabase): AbonoCuenta {
+    return {
+        id: abono.id,
+        fecha: abono.fecha,
+        hora: horaCorta(abono.hora),
+        monto: Number(abono.monto || 0),
+        metodo: metodoPago(abono.metodo),
+        observaciones: abono.observaciones || "",
+        usuarioNombre: abono.usuario_nombre || "",
+    };
+}
+
+function convertirCuenta(
+    cuenta: CuentaCobrarSupabase,
+    abonos: AbonoCuenta[]
+): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        abonado: Number(cuenta.abonado || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+        abonos,
+    };
+}
+
 export default function ReciboPage() {
     const params = useParams();
     const ventaId = String(params.id || "");
@@ -136,20 +202,61 @@ export default function ReciboPage() {
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
         CONFIGURACION_PREDETERMINADA
     );
-    const [ventas, setVentas] = useState<Venta[]>([]);
-    const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([]);
+    const [venta, setVenta] = useState<Venta | null>(null);
+    const [cuentaRelacionada, setCuentaRelacionada] =
+        useState<CuentaPorCobrar | null>(null);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            setConfiguracion(obtenerConfiguracionClinica());
+
+            const ventaSupabase = await obtenerVentaSupabase(ventaId);
+            const ventaConvertida = convertirVenta(ventaSupabase);
+
+            const cuentasSupabase = await listarCuentasCobrarSupabase();
+            const cuentaSupabase =
+                cuentasSupabase.find((cuenta) => cuenta.venta_id === ventaId) ||
+                null;
+
+            let cuentaConvertida: CuentaPorCobrar | null = null;
+
+            if (cuentaSupabase) {
+                const abonosSupabase = await listarAbonosCuentaSupabase(
+                    cuentaSupabase.id
+                );
+
+                cuentaConvertida = convertirCuenta(
+                    cuentaSupabase,
+                    abonosSupabase.map(convertirAbono)
+                );
+            }
+
+            setVenta(ventaConvertida);
+            setCuentaRelacionada(cuentaConvertida);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el recibo desde Supabase.";
+
+            setError(mensaje);
+            setVenta(null);
+            setCuentaRelacionada(null);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        setConfiguracion(obtenerConfiguracionClinica());
-        setVentas(leerLocalStorage<Venta[]>(VENTAS_KEY, []));
-        setCuentas(leerLocalStorage<CuentaPorCobrar[]>(CUENTAS_KEY, []));
-    }, []);
+        if (!ventaId) return;
 
-    const venta = ventas.find((item) => item.id === ventaId) || null;
-
-    const cuentaRelacionada = cuentas.find(
-        (cuenta) => cuenta.ventaId === ventaId
-    );
+        cargarDatos();
+    }, [ventaId]);
 
     const totalPagado = venta
         ? numero(venta.efectivo) + numero(venta.tarjeta) + numero(venta.transferencia)
@@ -162,7 +269,8 @@ export default function ReciboPage() {
     const comisionPOS = venta
         ? venta.comisionTarjeta !== undefined
             ? numero(venta.comisionTarjeta)
-            : numero(venta.tarjeta) * (numero(venta.comisionPOS ?? configuracion.comisionPOS) / 100)
+            : numero(venta.tarjeta) *
+            (numero(venta.comisionPOS ?? configuracion.comisionPOS) / 100)
         : 0;
 
     const netoTarjeta = venta
@@ -179,6 +287,26 @@ export default function ReciboPage() {
         window.print();
     }
 
+    if (cargando) {
+        return (
+            <main className="min-h-screen bg-slate-100 p-6">
+                <section className="mx-auto max-w-3xl rounded-3xl bg-white p-10 text-center shadow-sm">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-teal-50 text-teal-700">
+                        <Loader2 className="h-8 w-8 animate-spin" />
+                    </div>
+
+                    <h1 className="mt-5 text-2xl font-black text-slate-900">
+                        Cargando recibo
+                    </h1>
+
+                    <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                        Consultando la venta real desde Supabase.
+                    </p>
+                </section>
+            </main>
+        );
+    }
+
     if (!venta) {
         return (
             <main className="min-h-screen bg-slate-100 p-6">
@@ -192,8 +320,8 @@ export default function ReciboPage() {
                     </h1>
 
                     <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                        No encontramos una venta con el ID solicitado. Verificá el historial
-                        de Caja y abrí el recibo desde ahí.
+                        {error ||
+                            "No encontramos una venta con el ID solicitado. Verificá el historial de Caja y abrí el recibo desde ahí."}
                     </p>
 
                     <Link
@@ -436,21 +564,21 @@ export default function ReciboPage() {
                                             {venta.concepto}
                                         </p>
 
-                                        {venta.productoNombre && (
-                                            <p className="print-small mt-0.5 text-[10px] leading-4 text-slate-600">
-                                                Producto: {venta.productoNombre}
-                                            </p>
-                                        )}
-
                                         {venta.citaId && (
                                             <p className="print-small mt-0.5 text-[10px] leading-4 text-slate-600">
                                                 Cita vinculada: {venta.citaId}
                                             </p>
                                         )}
+
+                                        {cuentaRelacionada && (
+                                            <p className="print-small mt-0.5 text-[10px] leading-4 text-slate-600">
+                                                Cuenta por cobrar: {cuentaRelacionada.id}
+                                            </p>
+                                        )}
                                     </td>
 
                                     <td className="border-r border-slate-300 px-3 py-2 text-center font-bold print-border">
-                                        {venta.cantidadProducto || 1}
+                                        1
                                     </td>
 
                                     <td className="px-3 py-2 text-right font-black text-slate-950">

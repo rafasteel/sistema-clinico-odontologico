@@ -13,7 +13,9 @@ import {
     Pencil,
     Plus,
     ReceiptText,
+    RefreshCcw,
     Search,
+    ShieldAlert,
     Trash2,
     Wallet,
     XCircle,
@@ -24,6 +26,13 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import {
+    actualizarGastoSupabase,
+    anularGastoSupabase,
+    crearGastoSupabase,
+    listarGastosSupabase,
+    type GastoSupabase,
+} from "@/lib/supabase/gastos";
 
 type UsuarioSistema = {
     usuario: string;
@@ -140,6 +149,27 @@ function colorMetodo(metodo: string) {
     return "bg-slate-100 text-slate-600";
 }
 
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
+}
+
+function convertirGasto(gasto: GastoSupabase): Gasto {
+    return {
+        id: gasto.id,
+        fecha: gasto.fecha,
+        hora: horaCorta(gasto.hora),
+        categoria: gasto.categoria || "",
+        descripcion: gasto.descripcion || "",
+        monto: Number(gasto.monto || 0),
+        metodoPago: gasto.metodo_pago,
+        proveedor: gasto.proveedor || "",
+        usuarioNombre: gasto.usuario_nombre || "",
+        observaciones: gasto.observaciones || "",
+        estado: gasto.estado || "Activo",
+    };
+}
+
+
 export default function GastosPage() {
     const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
@@ -159,26 +189,42 @@ export default function GastosPage() {
     const [filtroEstado, setFiltroEstado] = useState<"Todos" | EstadoGasto>(
         "Todos"
     );
+    const [cargando, setCargando] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState("");
+
+    async function cargarDatos(mes = mesSeleccionado) {
+        setCargando(true);
+        setError("");
+
+        try {
+            const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+
+            if (usuarioGuardado) {
+                setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
+            }
+
+            setConfiguracion(obtenerConfiguracionClinica());
+
+            const gastosSupabase = await listarGastosSupabase(mes);
+            setGastos(gastosSupabase.map(convertirGasto));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudieron cargar los gastos desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
-        const gastosGuardados = localStorage.getItem("gastos_sistema_clinico");
+        cargarDatos(mesSeleccionado);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mesSeleccionado]);
 
-        if (usuarioGuardado) {
-            setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
-        }
-
-        setConfiguracion(obtenerConfiguracionClinica());
-
-        if (gastosGuardados) {
-            setGastos(JSON.parse(gastosGuardados) as Gasto[]);
-        }
-    }, []);
-
-    function guardarListaGastos(nuevaLista: Gasto[]) {
-        setGastos(nuevaLista);
-        localStorage.setItem("gastos_sistema_clinico", JSON.stringify(nuevaLista));
-    }
 
     function actualizarCampo<K extends keyof FormularioGasto>(
         campo: K,
@@ -195,7 +241,7 @@ export default function GastosPage() {
         setGastoEditandoId(null);
     }
 
-    function guardarGasto(event: FormEvent<HTMLFormElement>) {
+    async function guardarGasto(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!formulario.fecha) {
@@ -218,46 +264,53 @@ export default function GastosPage() {
             return;
         }
 
-        if (gastoEditandoId) {
-            const nuevaLista = gastos.map((gasto) =>
-                gasto.id === gastoEditandoId
-                    ? {
-                        ...gasto,
-                        fecha: formulario.fecha,
-                        categoria: formulario.categoria.trim(),
-                        descripcion: formulario.descripcion.trim(),
-                        monto: numero(formulario.monto),
-                        metodoPago: formulario.metodoPago,
-                        proveedor: formulario.proveedor.trim(),
-                        observaciones: formulario.observaciones.trim(),
-                    }
-                    : gasto
-            );
+        setGuardando(true);
 
-            guardarListaGastos(nuevaLista);
+        try {
+            if (gastoEditandoId) {
+                await actualizarGastoSupabase(gastoEditandoId, {
+                    fecha: formulario.fecha,
+                    categoria: formulario.categoria.trim(),
+                    descripcion: formulario.descripcion.trim(),
+                    monto: numero(formulario.monto),
+                    metodo_pago: formulario.metodoPago,
+                    proveedor: formulario.proveedor.trim(),
+                    observaciones: formulario.observaciones.trim(),
+                    usuario_nombre: usuario?.nombre || "Usuario no identificado",
+                });
+
+                limpiarFormulario();
+                await cargarDatos();
+
+                alert("Gasto actualizado correctamente.");
+                return;
+            }
+
+            await crearGastoSupabase({
+                fecha: formulario.fecha,
+                categoria: formulario.categoria.trim(),
+                descripcion: formulario.descripcion.trim(),
+                monto: numero(formulario.monto),
+                metodo_pago: formulario.metodoPago,
+                proveedor: formulario.proveedor.trim(),
+                usuario_nombre: usuario?.nombre || "Usuario no identificado",
+                observaciones: formulario.observaciones.trim(),
+            });
+
             limpiarFormulario();
-            alert("Gasto actualizado correctamente.");
-            return;
+            await cargarDatos();
+
+            alert("Gasto registrado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo guardar el gasto.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
         }
-
-        const nuevoGasto: Gasto = {
-            id: `GASTO-${Date.now()}`,
-            fecha: formulario.fecha,
-            hora: horaActualLocal(),
-            categoria: formulario.categoria.trim(),
-            descripcion: formulario.descripcion.trim(),
-            monto: numero(formulario.monto),
-            metodoPago: formulario.metodoPago,
-            proveedor: formulario.proveedor.trim(),
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            observaciones: formulario.observaciones.trim(),
-            estado: "Activo",
-        };
-
-        guardarListaGastos([nuevoGasto, ...gastos]);
-        limpiarFormulario();
-
-        alert("Gasto registrado correctamente.");
     }
 
     function editarGasto(gasto: Gasto) {
@@ -278,7 +331,7 @@ export default function GastosPage() {
         });
     }
 
-    function anularGasto(gasto: Gasto) {
+    async function anularGasto(gasto: Gasto) {
         if (gasto.estado === "Anulado") return;
 
         const confirmar = window.confirm(
@@ -287,17 +340,23 @@ export default function GastosPage() {
 
         if (!confirmar) return;
 
-        const nuevaLista = gastos.map((item) =>
-            item.id === gasto.id
-                ? {
-                    ...item,
-                    estado: "Anulado" as EstadoGasto,
-                }
-                : item
-        );
+        setGuardando(true);
 
-        guardarListaGastos(nuevaLista);
-        alert("Gasto anulado correctamente.");
+        try {
+            await anularGastoSupabase(gasto.id);
+            await cargarDatos();
+
+            alert("Gasto anulado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo anular el gasto.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
     const categoriasDisponibles = useMemo(() => {
@@ -395,6 +454,42 @@ export default function GastosPage() {
             descripcion="Registro, clasificación, análisis y auditoría de gastos operativos"
             moduloActivo="Control de Gastos"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudieron cargar los gastos
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Gastos conectados a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Registro, edición, anulación, filtros y análisis ya se guardan en base de datos.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={() => cargarDatos()}
+                    disabled={cargando || guardando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    Recargar
+                </button>
+            </section>
             <section className="grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
                     <div className="flex items-start justify-between">
@@ -661,9 +756,9 @@ export default function GastosPage() {
                             </div>
 
                             <div className="mt-5 flex flex-wrap gap-2">
-                                <button className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90">
+                                <button disabled={guardando} className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60">
                                     <CheckCircle2 className="h-4 w-4" />
-                                    {gastoEditandoId ? "Guardar cambios" : "Registrar gasto"}
+                                    {guardando ? "Guardando..." : gastoEditandoId ? "Guardar cambios" : "Registrar gasto"}
                                 </button>
 
                                 <button
@@ -1012,7 +1107,7 @@ export default function GastosPage() {
                                         colSpan={9}
                                         className="px-6 py-10 text-center text-[12px] text-slate-400"
                                     >
-                                        No hay gastos registrados o no coinciden con los filtros.
+                                        {cargando ? "Cargando gastos desde Supabase..." : "No hay gastos registrados o no coinciden con los filtros."}
                                     </td>
                                 </tr>
                             )}

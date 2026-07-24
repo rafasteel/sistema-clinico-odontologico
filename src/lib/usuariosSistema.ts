@@ -1,4 +1,4 @@
-export type RolUsuario = "ADMIN" | "DOCTOR" | "RECEPCION" | "CAJA";
+export type RolUsuario = "SUPER_ADMIN" | "ADMIN" | "DOCTOR" | "RECEPCION" | "CAJA";
 
 export type EstadoUsuarioSistema = "Activo" | "Inactivo";
 

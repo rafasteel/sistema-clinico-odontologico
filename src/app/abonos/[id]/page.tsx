@@ -1,14 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, FileText, Printer, ReceiptText } from "lucide-react";
+import {
+    ArrowLeft,
+    FileText,
+    Loader2,
+    Printer,
+    ReceiptText,
+} from "lucide-react";
 import {
     ConfiguracionClinica,
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import {
+    listarAbonosCuentaSupabase,
+    listarCuentasCobrarSupabase,
+    type AbonoCuentaSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    obtenerPacienteSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
 
 type Paciente = {
     id: string;
@@ -26,18 +43,28 @@ type Paciente = {
     ultimaCita: string;
 };
 
-type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia";
-
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
+type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia" | "Mixto";
 
 type AbonoCuenta = {
     id: string;
+    cuentaId: string;
+    ventaId: string;
+    pacienteId: string;
     fecha: string;
     hora: string;
     monto: number;
     metodo: MetodoPago;
-    observaciones?: string;
-    usuarioNombre?: string;
+    efectivo: number;
+    tarjeta: number;
+    transferencia: number;
+    posId: string;
+    posNombre: string;
+    posBanco: string;
+    posComision: number;
+    comisionTarjeta: number;
+    netoTarjeta: number;
+    observaciones: string;
+    usuarioNombre: string;
 };
 
 type CuentaPorCobrar = {
@@ -47,33 +74,18 @@ type CuentaPorCobrar = {
     pacienteNombre: string;
     concepto: string;
     total: number;
+    abonado: number;
     saldo: number;
     fecha: string;
     fechaVencimiento: string;
-    estado: EstadoCuenta;
-    abonos?: AbonoCuenta[];
+    estado: EstadoCuentaCobrarSupabase;
 };
 
 type AbonoEncontrado = {
     abono: AbonoCuenta;
     cuenta: CuentaPorCobrar;
+    abonosCuenta: AbonoCuenta[];
 };
-
-const CUENTAS_KEY = "cuentas_cobrar_sistema_clinico";
-const PACIENTES_KEY = "pacientes_sistema_clinico";
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
 
 function numero(valor: unknown) {
     const convertido = Number(valor || 0);
@@ -81,6 +93,10 @@ function numero(valor: unknown) {
     if (Number.isNaN(convertido)) return 0;
 
     return convertido;
+}
+
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
 }
 
 function formatoMoneda(valor: number, simbolo = "C$") {
@@ -99,6 +115,81 @@ function fechaLegible(fecha: string) {
     return `${partes[2]}/${partes[1]}/${partes[0]}`;
 }
 
+function metodoPago(valor: string): MetodoPago {
+    if (valor === "Efectivo") return "Efectivo";
+    if (valor === "Tarjeta") return "Tarjeta";
+    if (valor === "Transferencia") return "Transferencia";
+
+    return "Mixto";
+}
+
+function convertirPaciente(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "",
+        enfermedades:
+            paciente.enfermedades_sistemicas ||
+            paciente.antecedentes ||
+            "",
+        medicamentos: paciente.medicamentos_actuales || "",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
+}
+
+function convertirCuenta(cuenta: CuentaCobrarSupabase): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        abonado: Number(cuenta.abonado || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+    };
+}
+
+function convertirAbono(abono: AbonoCuentaSupabase): AbonoCuenta {
+    return {
+        id: abono.id,
+        cuentaId: abono.cuenta_id,
+        ventaId: abono.venta_id || "",
+        pacienteId: abono.paciente_id || "",
+        fecha: abono.fecha,
+        hora: horaCorta(abono.hora),
+        monto: Number(abono.monto || 0),
+        metodo: metodoPago(abono.metodo),
+        efectivo: Number(abono.efectivo || 0),
+        tarjeta: Number(abono.tarjeta || 0),
+        transferencia: Number(abono.transferencia || 0),
+        posId: abono.pos_id || "",
+        posNombre: abono.pos_nombre || "",
+        posBanco: abono.pos_banco || "",
+        posComision: Number(abono.comision_pos_porcentaje || 0),
+        comisionTarjeta: Number(abono.comision_pos_monto || 0),
+        netoTarjeta: Number(abono.neto_tarjeta || 0),
+        observaciones: abono.observaciones || "",
+        usuarioNombre: abono.usuario_nombre || "",
+    };
+}
+
+function ordenarAbonosAsc(abonos: AbonoCuenta[]) {
+    return [...abonos].sort((a, b) =>
+        `${a.fecha} ${a.hora} ${a.id}`.localeCompare(`${b.fecha} ${b.hora} ${b.id}`)
+    );
+}
+
 export default function ReciboAbonoPage() {
     const params = useParams();
     const abonoId = String(params.id || "");
@@ -108,38 +199,131 @@ export default function ReciboAbonoPage() {
     );
     const [resultado, setResultado] = useState<AbonoEncontrado | null>(null);
     const [paciente, setPaciente] = useState<Paciente | null>(null);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            setConfiguracion(obtenerConfiguracionClinica());
+
+            const cuentasSupabase = await listarCuentasCobrarSupabase();
+
+            let encontrado: AbonoEncontrado | null = null;
+
+            for (const cuentaSupabase of cuentasSupabase) {
+                const abonosSupabase = await listarAbonosCuentaSupabase(
+                    cuentaSupabase.id
+                );
+
+                const abonosConvertidos = abonosSupabase.map(convertirAbono);
+                const abonoEncontrado =
+                    abonosConvertidos.find((abono) => abono.id === abonoId) || null;
+
+                if (abonoEncontrado) {
+                    encontrado = {
+                        abono: abonoEncontrado,
+                        cuenta: convertirCuenta(cuentaSupabase),
+                        abonosCuenta: abonosConvertidos,
+                    };
+                    break;
+                }
+            }
+
+            if (!encontrado) {
+                setResultado(null);
+                setPaciente(null);
+                setError("No encontramos el abono solicitado en Supabase.");
+                return;
+            }
+
+            let pacienteEncontrado: Paciente | null = null;
+
+            if (encontrado.cuenta.pacienteId) {
+                try {
+                    const pacienteSupabase = await obtenerPacienteSupabase(
+                        encontrado.cuenta.pacienteId
+                    );
+                    pacienteEncontrado = convertirPaciente(pacienteSupabase);
+                } catch {
+                    pacienteEncontrado = null;
+                }
+            }
+
+            setResultado(encontrado);
+            setPaciente(pacienteEncontrado);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el recibo de abono desde Supabase.";
+
+            setResultado(null);
+            setPaciente(null);
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const config = obtenerConfiguracionClinica();
-        const cuentas = leerLocalStorage<CuentaPorCobrar[]>(CUENTAS_KEY, []);
-        const pacientes = leerLocalStorage<Paciente[]>(PACIENTES_KEY, []);
+        if (!abonoId) return;
 
-        let encontrado: AbonoEncontrado | null = null;
-
-        for (const cuenta of cuentas) {
-            const abono = (cuenta.abonos || []).find((item) => item.id === abonoId);
-
-            if (abono) {
-                encontrado = {
-                    abono,
-                    cuenta,
-                };
-                break;
-            }
-        }
-
-        const pacienteEncontrado = encontrado
-            ? pacientes.find((item) => item.id === encontrado?.cuenta.pacienteId) ||
-            null
-            : null;
-
-        setConfiguracion(config);
-        setResultado(encontrado);
-        setPaciente(pacienteEncontrado);
+        cargarDatos();
     }, [abonoId]);
 
     function imprimir() {
         window.print();
+    }
+
+    const calculoSaldo = useMemo(() => {
+        if (!resultado) {
+            return {
+                saldoAntes: 0,
+                saldoDespues: 0,
+                abonadoTotal: 0,
+            };
+        }
+
+        const abonosOrdenados = ordenarAbonosAsc(resultado.abonosCuenta);
+        let abonadoAntes = 0;
+
+        for (const abono of abonosOrdenados) {
+            if (abono.id === resultado.abono.id) break;
+
+            abonadoAntes += numero(abono.monto);
+        }
+
+        const saldoAntes = Math.max(numero(resultado.cuenta.total) - abonadoAntes, 0);
+        const saldoDespues = Math.max(saldoAntes - numero(resultado.abono.monto), 0);
+
+        return {
+            saldoAntes,
+            saldoDespues,
+            abonadoTotal: numero(resultado.cuenta.abonado),
+        };
+    }, [resultado]);
+
+    if (cargando) {
+        return (
+            <main className="min-h-screen bg-slate-100 p-6">
+                <section className="mx-auto max-w-3xl rounded-3xl bg-white p-10 text-center shadow-sm">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-teal-50 text-teal-700">
+                        <Loader2 className="h-8 w-8 animate-spin" />
+                    </div>
+
+                    <h1 className="mt-5 text-2xl font-black text-slate-900">
+                        Cargando recibo de abono
+                    </h1>
+
+                    <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                        Consultando el abono real desde Supabase.
+                    </p>
+                </section>
+            </main>
+        );
     }
 
     if (!resultado) {
@@ -155,8 +339,8 @@ export default function ReciboAbonoPage() {
                     </h1>
 
                     <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                        No encontramos el abono solicitado. Puede que haya sido eliminado o
-                        que el enlace no sea válido.
+                        {error ||
+                            "No encontramos el abono solicitado. Puede que haya sido eliminado o que el enlace no sea válido."}
                     </p>
 
                     <Link
@@ -172,13 +356,9 @@ export default function ReciboAbonoPage() {
     }
 
     const { abono, cuenta } = resultado;
-    const abonos = cuenta.abonos || [];
-    const abonadoTotal = abonos.reduce(
-        (total, item) => total + numero(item.monto),
-        0
-    );
-    const saldoDespues = numero(cuenta.saldo);
-    const saldoAntes = saldoDespues + numero(abono.monto);
+    const saldoAntes = calculoSaldo.saldoAntes;
+    const saldoDespues = calculoSaldo.saldoDespues;
+    const abonadoTotal = calculoSaldo.abonadoTotal;
 
     return (
         <main className="min-h-screen bg-slate-100 px-4 py-5 text-slate-950 print:bg-white print:px-0 print:py-0">
@@ -394,7 +574,7 @@ export default function ReciboAbonoPage() {
                                         Abono
                                     </th>
                                     <th className="border-b border-r border-slate-400 px-3 py-2 text-right text-[10px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                        Saldo actual
+                                        Saldo después
                                     </th>
                                     <th className="border-b border-slate-400 px-3 py-2 text-left text-[10px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
                                         Registrado por
@@ -437,6 +617,67 @@ export default function ReciboAbonoPage() {
 
                                     <td className="px-3 py-2 align-top text-[10px] font-bold text-slate-700">
                                         {abono.usuarioNombre || "Usuario no identificado"}
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section className="py-3 print:py-2">
+                    <h2 className="mb-2 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                        Distribución del pago
+                    </h2>
+
+                    <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
+                        <table className="print-table w-full border-collapse text-[10px]">
+                            <thead>
+                                <tr className="bg-slate-100 print-light-bg">
+                                    <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                        Efectivo
+                                    </th>
+                                    <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                        Tarjeta
+                                    </th>
+                                    <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                        Transferencia
+                                    </th>
+                                    <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                        POS / Neto tarjeta
+                                    </th>
+                                </tr>
+                            </thead>
+
+                            <tbody>
+                                <tr>
+                                    <td className="border-r border-slate-300 px-2 py-2 font-bold print-border">
+                                        {formatoMoneda(
+                                            abono.efectivo,
+                                            configuracion.simboloMoneda
+                                        )}
+                                    </td>
+
+                                    <td className="border-r border-slate-300 px-2 py-2 font-bold print-border">
+                                        {formatoMoneda(
+                                            abono.tarjeta,
+                                            configuracion.simboloMoneda
+                                        )}
+                                    </td>
+
+                                    <td className="border-r border-slate-300 px-2 py-2 font-bold print-border">
+                                        {formatoMoneda(
+                                            abono.transferencia,
+                                            configuracion.simboloMoneda
+                                        )}
+                                    </td>
+
+                                    <td className="px-2 py-2 font-bold">
+                                        {abono.tarjeta > 0
+                                            ? `${abono.posNombre || "POS no registrado"} · Neto ${formatoMoneda(
+                                                abono.netoTarjeta,
+                                                configuracion.simboloMoneda
+                                            )}`
+                                            : "No aplica"}
                                     </td>
                                 </tr>
                             </tbody>
@@ -488,7 +729,7 @@ export default function ReciboAbonoPage() {
                                 SALDO
                             </span>
                             <strong className="text-lg text-slate-950">
-                                {formatoMoneda(saldoDespues, configuracion.simboloMoneda)}
+                                {formatoMoneda(cuenta.saldo, configuracion.simboloMoneda)}
                             </strong>
                         </div>
                     </div>

@@ -13,6 +13,7 @@ import {
     FileText,
     Package,
     ReceiptText,
+    RefreshCcw,
     ShieldAlert,
     Stethoscope,
     TrendingDown,
@@ -26,6 +27,42 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import {
+    listarPacientesSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
+import {
+    listarCuentasCobrarSupabase,
+    listarVentasSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    listarGastosSupabase,
+    type EstadoGastoSupabase,
+    type GastoSupabase,
+} from "@/lib/supabase/gastos";
+import {
+    listarCitasSupabase,
+    type CitaSupabase,
+    type EstadoCitaSupabase,
+} from "@/lib/supabase/citas";
+import {
+    listarProductosInventarioSupabase,
+    type ProductoInventarioSupabase,
+} from "@/lib/supabase/inventario";
+import {
+    listarCuentasPagarSupabase,
+    type CuentaPagarSupabase,
+    type EstadoCuentaPagarSupabase,
+} from "@/lib/supabase/proveedores";
+import {
+    listarCierresCajaSupabase,
+    type CierreCajaSupabase,
+    type EstadoCierreCajaSupabase,
+} from "@/lib/supabase/cierresCaja";
 
 type Paciente = {
     id: string;
@@ -36,7 +73,7 @@ type Paciente = {
     saldoPendiente: number;
 };
 
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
+type EstadoVenta = EstadoVentaSupabase;
 
 type Venta = {
     id: string;
@@ -52,9 +89,10 @@ type Venta = {
     credito: number;
     estado: EstadoVenta;
     usuarioNombre: string;
+    comisionPOS: number;
 };
 
-type EstadoGasto = "Activo" | "Anulado";
+type EstadoGasto = EstadoGastoSupabase;
 
 type Gasto = {
     id: string;
@@ -69,16 +107,7 @@ type Gasto = {
     estado: EstadoGasto;
 };
 
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cobrada"
-    | "Reagendada"
-    | "Cancelada"
-    | "No asistió";
+type EstadoCita = EstadoCitaSupabase;
 
 type Cita = {
     id: string;
@@ -108,7 +137,7 @@ type Producto = {
     estado: "Activo" | "Inactivo";
 };
 
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
+type EstadoCuenta = EstadoCuentaCobrarSupabase;
 
 type CuentaPorCobrar = {
     id: string;
@@ -123,12 +152,7 @@ type CuentaPorCobrar = {
     estado: EstadoCuenta;
 };
 
-type EstadoCuentaPagar =
-    | "Pendiente"
-    | "Parcial"
-    | "Pagada"
-    | "Vencida"
-    | "Anulada";
+type EstadoCuentaPagar = EstadoCuentaPagarSupabase;
 
 type CuentaPorPagar = {
     id: string;
@@ -154,7 +178,7 @@ type CierreCaja = {
     diferenciaEfectivo: number;
     diferenciaTarjeta: number;
     diferenciaTransferencia: number;
-    estado: "Cuadrado" | "Con diferencia";
+    estado: EstadoCierreCajaSupabase;
 };
 
 type ActividadReciente = {
@@ -180,20 +204,6 @@ function fechaHoyLocal() {
 
 function mesActualLocal() {
     return fechaHoyLocal().slice(0, 7);
-}
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
 }
 
 function formatoMoneda(valor: number, simbolo = "C$") {
@@ -237,6 +247,141 @@ function colorTipoActividad(tipo: ActividadReciente["tipo"]) {
     return "bg-slate-100 text-slate-700";
 }
 
+
+function ultimoDiaMes(mes: string) {
+    const [year, month] = mes.split("-").map(Number);
+    const fecha = new Date(year, month, 0);
+    const day = String(fecha.getDate()).padStart(2, "0");
+
+    return `${mes}-${day}`;
+}
+
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
+}
+
+function convertirPaciente(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+    };
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha,
+        hora: horaCorta(venta.hora),
+        tipoCobro: venta.tipo_cobro || "Venta",
+        clienteNombre: venta.cliente_nombre || "",
+        concepto: venta.concepto || "",
+        total: Number(venta.total || 0),
+        efectivo: Number(venta.efectivo || 0),
+        tarjeta: Number(venta.tarjeta || 0),
+        transferencia: Number(venta.transferencia || 0),
+        credito: Number(venta.credito || 0),
+        estado: venta.estado || "Pagada",
+        usuarioNombre: venta.usuario_nombre || "",
+        comisionPOS: Number(venta.comision_pos_monto || 0),
+    };
+}
+
+function convertirGasto(gasto: GastoSupabase): Gasto {
+    return {
+        id: gasto.id,
+        fecha: gasto.fecha,
+        hora: horaCorta(gasto.hora),
+        categoria: gasto.categoria || "",
+        descripcion: gasto.descripcion || "",
+        monto: Number(gasto.monto || 0),
+        metodoPago: gasto.metodo_pago || "Efectivo",
+        proveedor: gasto.proveedor || "",
+        usuarioNombre: gasto.usuario_nombre || "",
+        estado: gasto.estado || "Activo",
+    };
+}
+
+function convertirCita(cita: CitaSupabase): Cita {
+    return {
+        id: cita.id,
+        pacienteNombre: cita.paciente_nombre || "",
+        doctorNombre: cita.doctor_nombre || "",
+        servicioNombre: cita.servicio_nombre || "",
+        costo: Number(cita.costo || 0),
+        fecha: cita.fecha,
+        hora: horaCorta(cita.hora),
+        estado: cita.estado || "Programada",
+        observaciones: cita.observaciones || "",
+    };
+}
+
+function convertirProducto(producto: ProductoInventarioSupabase): Producto {
+    return {
+        id: producto.id,
+        codigo: producto.codigo || "",
+        nombre: producto.nombre || "",
+        categoria: producto.categoria || "",
+        unidad: producto.unidad || "",
+        stock: Number(producto.stock || 0),
+        stockMinimo: Number(producto.stock_minimo || 0),
+        costoCompra: Number(producto.costo_compra || 0),
+        precioVenta: Number(producto.precio_venta || 0),
+        proveedor: producto.proveedor || "",
+        vencimiento: producto.vencimiento || "",
+        estado: producto.estado || "Activo",
+    };
+}
+
+function convertirCuentaCobrar(cuenta: CuentaCobrarSupabase): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+    };
+}
+
+function convertirCuentaPagar(cuenta: CuentaPagarSupabase): CuentaPorPagar {
+    return {
+        id: cuenta.id,
+        compraId: cuenta.compra_id || "",
+        proveedorId: cuenta.proveedor_id || "",
+        proveedorNombre: cuenta.proveedor_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+    };
+}
+
+function convertirCierre(cierre: CierreCajaSupabase): CierreCaja {
+    return {
+        id: cierre.id,
+        fecha: cierre.fecha,
+        hora: horaCorta(cierre.hora),
+        usuarioNombre: cierre.usuario_nombre || "",
+        ventasCantidad: Number(cierre.ventas_cantidad || 0),
+        ventasBrutas: Number(cierre.ventas_brutas || 0),
+        gastosTotal: Number(cierre.gastos_total || 0),
+        diferenciaEfectivo: Number(cierre.diferencia_efectivo || 0),
+        diferenciaTarjeta: Number(cierre.diferencia_tarjeta || 0),
+        diferenciaTransferencia: Number(cierre.diferencia_transferencia || 0),
+        estado: cierre.estado || "Cuadrado",
+    };
+}
+
 export default function DashboardPage() {
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
         CONFIGURACION_PREDETERMINADA
@@ -251,30 +396,65 @@ export default function DashboardPage() {
     const [cuentasPagar, setCuentasPagar] = useState<CuentaPorPagar[]>([]);
     const [cierres, setCierres] = useState<CierreCaja[]>([]);
 
-    useEffect(() => {
-        setConfiguracion(obtenerConfiguracionClinica());
-
-        setPacientes(leerLocalStorage<Paciente[]>("pacientes_sistema_clinico", []));
-        setVentas(leerLocalStorage<Venta[]>("ventas_sistema_clinico", []));
-        setGastos(leerLocalStorage<Gasto[]>("gastos_sistema_clinico", []));
-        setCitas(leerLocalStorage<Cita[]>("citas_sistema_clinico", []));
-        setProductos(leerLocalStorage<Producto[]>("productos_sistema_clinico", []));
-        setCuentasCobrar(
-            leerLocalStorage<CuentaPorCobrar[]>(
-                "cuentas_cobrar_sistema_clinico",
-                []
-            )
-        );
-        setCuentasPagar(
-            leerLocalStorage<CuentaPorPagar[]>("cuentas_pagar_sistema_clinico", [])
-        );
-        setCierres(
-            leerLocalStorage<CierreCaja[]>("cierres_caja_sistema_clinico", [])
-        );
-    }, []);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
 
     const hoy = fechaHoyLocal();
     const mesActual = mesActualLocal();
+    const fechaInicioMes = `${mesActual}-01`;
+    const fechaFinMes = ultimoDiaMes(mesActual);
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            setConfiguracion(obtenerConfiguracionClinica());
+
+            const [
+                pacientesSupabase,
+                ventasSupabase,
+                gastosSupabase,
+                citasSupabase,
+                productosSupabase,
+                cuentasCobrarSupabase,
+                cuentasPagarSupabase,
+                cierresSupabase,
+            ] = await Promise.all([
+                listarPacientesSupabase(),
+                listarVentasSupabase(fechaInicioMes, fechaFinMes),
+                listarGastosSupabase(mesActual),
+                listarCitasSupabase(fechaInicioMes, fechaFinMes),
+                listarProductosInventarioSupabase(),
+                listarCuentasCobrarSupabase(),
+                listarCuentasPagarSupabase(),
+                listarCierresCajaSupabase(),
+            ]);
+
+            setPacientes(pacientesSupabase.map(convertirPaciente));
+            setVentas(ventasSupabase.map(convertirVenta));
+            setGastos(gastosSupabase.map(convertirGasto));
+            setCitas(citasSupabase.map(convertirCita));
+            setProductos(productosSupabase.map(convertirProducto));
+            setCuentasCobrar(cuentasCobrarSupabase.map(convertirCuentaCobrar));
+            setCuentasPagar(cuentasPagarSupabase.map(convertirCuentaPagar));
+            setCierres(cierresSupabase.map(convertirCierre));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el dashboard desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
+
+    useEffect(() => {
+        cargarDatos();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
     const ventasHoy = ventas.filter(
         (venta) => venta.fecha === hoy && venta.estado !== "Anulada"
@@ -361,7 +541,7 @@ export default function DashboardPage() {
         0
     );
 
-    const comisionPOSMes = tarjetaMes * (configuracion.comisionPOS / 100);
+    const comisionPOSMes = ventasMes.reduce((total, venta) => total + (venta.comisionPOS || 0), 0);
     const utilidadMes = ingresosMes - gastosTotalMes - comisionPOSMes;
 
     const cuentasCobrarPendientes = cuentasCobrar.filter(
@@ -409,15 +589,15 @@ export default function DashboardPage() {
         return total + (producto.stock || 0) * costo;
     }, 0);
 
-    const cierresMes = cierres.filter((cierre) =>
-        cierre.fecha.startsWith(mesActual)
+    const cierresMes = cierres.filter(
+        (cierre) => cierre.fecha.startsWith(mesActual) && cierre.estado !== "Anulado"
     );
 
     const cierresConDiferencia = cierresMes.filter(
         (cierre) => cierre.estado === "Con diferencia"
     );
 
-    const cierreHoy = cierres.find((cierre) => cierre.fecha === hoy);
+    const cierreHoy = cierres.find((cierre) => cierre.fecha === hoy && cierre.estado !== "Anulado");
 
     const actividadReciente = useMemo<ActividadReciente[]>(() => {
         const actividadVentas: ActividadReciente[] = ventas.slice(0, 40).map((venta) => ({
@@ -469,7 +649,9 @@ export default function DashboardPage() {
             titulo:
                 cierre.estado === "Cuadrado"
                     ? "Cierre de caja cuadrado"
-                    : "Cierre con diferencia",
+                    : cierre.estado === "Anulado"
+                        ? "Cierre de caja anulado"
+                        : "Cierre con diferencia",
             detalle: `${cierre.ventasCantidad} venta(s) · ${cierre.usuarioNombre}`,
             monto: cierre.ventasBrutas || 0,
             href: "/cierre-caja",
@@ -491,7 +673,7 @@ export default function DashboardPage() {
             titulo: "Cuentas por cobrar vencidas",
             descripcion: `${cuentasCobrarVencidas.length} cuenta(s) vencida(s) de pacientes.`,
             cantidad: cuentasCobrarVencidas.length,
-            href: "/reportes",
+            href: "/reporte-creditos",
             icono: BadgeDollarSign,
             color: "bg-amber-50 text-amber-700 border-amber-100",
         },
@@ -527,6 +709,43 @@ export default function DashboardPage() {
             descripcion="Resumen ejecutivo de agenda, caja, gastos, inventario, créditos y alertas"
             moduloActivo="Dashboard"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar el dashboard
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Dashboard conectado a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Agenda, caja, gastos, inventario, cuentas y cierres se leen desde la base de datos.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar"}
+                </button>
+            </section>
+
             <section className="overflow-hidden rounded-3xl bg-slate-900 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
                 <div className="grid gap-6 lg:grid-cols-[1fr_360px] lg:items-center">
                     <div>
@@ -767,10 +986,10 @@ export default function DashboardPage() {
                                     <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
                                         <CalendarClock className="mx-auto h-10 w-10 text-slate-300" />
                                         <h4 className="mt-3 text-sm font-black text-slate-700">
-                                            No hay citas para hoy
+                                            {cargando ? "Cargando agenda..." : "No hay citas para hoy"}
                                         </h4>
                                         <p className="mt-1 text-xs text-slate-400">
-                                            La agenda del día está libre.
+                                            {cargando ? "Consultando citas desde Supabase." : "La agenda del día está libre."}
                                         </p>
                                     </div>
                                 )}
@@ -835,10 +1054,10 @@ export default function DashboardPage() {
                                     <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
                                         <FileText className="mx-auto h-10 w-10 text-slate-300" />
                                         <h4 className="mt-3 text-sm font-black text-slate-700">
-                                            Sin actividad todavía
+                                            {cargando ? "Cargando actividad..." : "Sin actividad todavía"}
                                         </h4>
                                         <p className="mt-1 text-xs text-slate-400">
-                                            Cuando registres citas, ventas o gastos aparecerán aquí.
+                                            {cargando ? "Consultando movimientos desde Supabase." : "Cuando registres citas, ventas o gastos aparecerán aquí."}
                                         </p>
                                     </div>
                                 )}
@@ -971,7 +1190,7 @@ export default function DashboardPage() {
 
                         <div className="grid gap-3 p-5">
                             <Link
-                                href="/reportes"
+                                href="/reporte-creditos"
                                 className="rounded-2xl bg-teal-50 p-4 hover:bg-teal-100"
                             >
                                 <p className="text-xs font-bold text-teal-700">
