@@ -34,12 +34,26 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
-
-type UsuarioSistema = {
-    usuario: string;
-    nombre: string;
-    rol: string;
-};
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import { crearClienteSupabase } from "@/lib/supabase/client";
+import {
+    obtenerPacienteSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
+import {
+    anularNotaClinicaSupabase,
+    anularRecetaSupabase,
+    cambiarEstadoTratamientoSupabase,
+    crearNotaClinicaSupabase,
+    crearRecetaSupabase,
+    crearTratamientoSupabase,
+    listarNotasClinicasPacienteSupabase,
+    listarRecetasPacienteSupabase,
+    listarTratamientosPacienteSupabase,
+    type NotaClinicaSupabase,
+    type RecetaSupabase,
+    type TratamientoSupabase,
+} from "@/lib/supabase/perfilPaciente";
 
 type Paciente = {
     id: string;
@@ -221,29 +235,8 @@ function fechaHoyLocal() {
     return `${year}-${month}-${day}`;
 }
 
-function horaActualLocal() {
-    const fecha = new Date();
-    const hours = String(fecha.getHours()).padStart(2, "0");
-    const minutes = String(fecha.getMinutes()).padStart(2, "0");
-
-    return `${hours}:${minutes}`;
-}
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
-function numero(valor: string) {
-    const convertido = Number(valor || 0);
+function numero(valor: unknown) {
+    const convertido = Number(valor ?? 0);
     if (Number.isNaN(convertido)) return 0;
 
     return convertido;
@@ -339,6 +332,211 @@ function estadoVisualCuenta(fechaVencimiento: string, estado: EstadoCuenta) {
     return estado;
 }
 
+function convertirPacienteSupabase(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "No refiere",
+        enfermedades:
+            paciente.enfermedades_sistemicas ||
+            paciente.antecedentes ||
+            "No refiere",
+        medicamentos: paciente.medicamentos_actuales || "No refiere",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
+}
+
+function horaCorta(hora: string) {
+    if (!hora) return "";
+
+    return hora.slice(0, 5);
+}
+
+function texto(valor: unknown, respaldo = "") {
+    const convertido = String(valor ?? "").trim();
+
+    return convertido || respaldo;
+}
+
+function fechaSolo(valor: unknown) {
+    const convertido = texto(valor);
+
+    if (convertido.length >= 10) return convertido.slice(0, 10);
+
+    return "";
+}
+
+function horaSolo(valor: unknown) {
+    const convertido = texto(valor);
+
+    if (!convertido) return "";
+
+    if (convertido.includes("T")) return convertido.slice(11, 16);
+
+    return convertido.slice(0, 5);
+}
+
+function convertirCitaSupabase(data: Record<string, any>): Cita {
+    return {
+        id: texto(data.id),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        pacienteNombre: texto(data.paciente_nombre || data.pacienteNombre),
+        doctorId: texto(data.doctor_id || data.doctorId),
+        doctorNombre: texto(data.doctor_nombre || data.doctorNombre),
+        servicioId: texto(data.servicio_id || data.servicioId),
+        servicioNombre: texto(data.servicio_nombre || data.servicioNombre),
+        costo: numero(data.costo),
+        fecha: fechaSolo(data.fecha),
+        hora: horaSolo(data.hora || data.creado_en || data.creadaEn),
+        recurrencia: texto(data.recurrencia, "No repetir"),
+        estado: texto(data.estado, "Programada") as EstadoCita,
+        observaciones: texto(data.observaciones),
+        creadaEn: texto(data.creado_en || data.creadaEn),
+    };
+}
+
+function convertirVentaSupabase(data: Record<string, any>): Venta {
+    return {
+        id: texto(data.id),
+        fecha: fechaSolo(data.fecha || data.creado_en || data.creadaEn),
+        hora: horaSolo(data.hora || data.creado_en || data.creadaEn),
+        tipoCobro: texto(data.tipo_cobro || data.tipoCobro),
+        citaId: texto(data.cita_id || data.citaId),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        clienteNombre: texto(data.cliente_nombre || data.clienteNombre),
+        concepto: texto(data.concepto),
+        total: numero(data.total),
+        efectivo: numero(data.efectivo),
+        tarjeta: numero(data.tarjeta),
+        transferencia: numero(data.transferencia),
+        credito: numero(data.credito),
+        estado: texto(data.estado, "Pagada") as EstadoVenta,
+        usuarioNombre: texto(data.usuario_nombre || data.usuarioNombre),
+        observaciones: texto(data.observaciones),
+    };
+}
+
+function convertirCuentaSupabase(data: Record<string, any>): CuentaPorCobrar {
+    return {
+        id: texto(data.id),
+        ventaId: texto(data.venta_id || data.ventaId),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        pacienteNombre: texto(data.paciente_nombre || data.pacienteNombre),
+        concepto: texto(data.concepto),
+        total: numero(data.total),
+        saldo: numero(data.saldo),
+        fecha: fechaSolo(data.fecha || data.creado_en || data.creadaEn),
+        fechaVencimiento: fechaSolo(data.fecha_vencimiento || data.fechaVencimiento),
+        estado: texto(data.estado, "Pendiente") as EstadoCuenta,
+    };
+}
+
+async function listarCitasPacienteSupabaseDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("citas")
+        .select("*")
+        .eq("paciente_id", pacienteId)
+        .order("fecha", { ascending: false })
+        .order("hora", { ascending: false });
+
+    if (error) throw new Error(error.message);
+
+    return (data || []).map((item) =>
+        convertirCitaSupabase(item as Record<string, any>)
+    );
+}
+
+async function listarVentasPacienteSupabaseDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("ventas")
+        .select("*")
+        .eq("paciente_id", pacienteId)
+        .order("fecha", { ascending: false })
+        .order("hora", { ascending: false });
+
+    if (error) throw new Error(error.message);
+
+    return (data || []).map((item) =>
+        convertirVentaSupabase(item as Record<string, any>)
+    );
+}
+
+async function listarCuentasPacienteSupabaseDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("cuentas_cobrar")
+        .select("*")
+        .eq("paciente_id", pacienteId)
+        .order("fecha", { ascending: false });
+
+    if (error) throw new Error(error.message);
+
+    return (data || []).map((item) =>
+        convertirCuentaSupabase(item as Record<string, any>)
+    );
+}
+
+function convertirNotaClinicaSupabase(nota: NotaClinicaSupabase): NotaClinica {
+    return {
+        id: nota.id,
+        pacienteId: nota.paciente_id,
+        fecha: nota.fecha || "",
+        hora: horaCorta(nota.hora || ""),
+        doctor: nota.doctor_nombre || "",
+        servicio: nota.servicio_nombre || "",
+        diagnostico: nota.diagnostico || "",
+        procedimiento: nota.procedimiento || "",
+        observaciones: nota.observaciones || "",
+        proximaCita: nota.proxima_cita || "",
+        usuarioNombre: "Usuario del sistema",
+        estado: nota.estado || "Activa",
+    };
+}
+
+function convertirTratamientoSupabase(
+    tratamiento: TratamientoSupabase
+): Tratamiento {
+    return {
+        id: tratamiento.id,
+        pacienteId: tratamiento.paciente_id,
+        fecha: tratamiento.fecha || "",
+        nombre: tratamiento.nombre || "",
+        descripcion: tratamiento.descripcion || "",
+        total: Number(tratamiento.total || 0),
+        abonado: Number(tratamiento.abonado || 0),
+        estado: tratamiento.estado || "Planificado",
+    };
+}
+
+function convertirRecetaSupabase(receta: RecetaSupabase): Receta {
+    return {
+        id: receta.id,
+        pacienteId: receta.paciente_id,
+        fecha: receta.fecha || "",
+        hora: horaCorta(receta.hora || ""),
+        doctor: receta.doctor_nombre || "",
+        doctorNombre: receta.doctor_nombre || "",
+        diagnostico: receta.diagnostico || "",
+        medicamento: receta.medicamento || "",
+        indicaciones: receta.indicaciones || "",
+        duracion: receta.duracion || "",
+        observaciones: receta.observaciones || "",
+        estado: receta.estado || "Activa",
+    };
+}
+
 export default function PerfilPacientePage() {
     const params = useParams();
     const pacienteId = String(params.id || "");
@@ -347,7 +545,6 @@ export default function PerfilPacientePage() {
         CONFIGURACION_PREDETERMINADA
     );
 
-    const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
     const [paciente, setPaciente] = useState<Paciente | null>(null);
 
     const [citas, setCitas] = useState<Cita[]>([]);
@@ -356,6 +553,8 @@ export default function PerfilPacientePage() {
     const [notas, setNotas] = useState<NotaClinica[]>([]);
     const [tratamientos, setTratamientos] = useState<Tratamiento[]>([]);
     const [recetas, setRecetas] = useState<Receta[]>([]);
+    const [cargandoPerfil, setCargandoPerfil] = useState(true);
+    const [errorPerfil, setErrorPerfil] = useState("");
 
     const [formularioNota, setFormularioNota] =
         useState<FormularioNota>(formularioNotaVacio);
@@ -364,36 +563,68 @@ export default function PerfilPacientePage() {
     const [formularioReceta, setFormularioReceta] =
         useState<FormularioReceta>(formularioRecetaVacio);
 
+    async function cargarPerfilPaciente() {
+        setCargandoPerfil(true);
+        setErrorPerfil("");
+
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const [
+                pacienteSupabase,
+                notasSupabase,
+                tratamientosSupabase,
+                recetasSupabase,
+                citasSupabase,
+                ventasSupabase,
+                cuentasSupabase,
+            ] = await Promise.all([
+                obtenerPacienteSupabase(pacienteId),
+                listarNotasClinicasPacienteSupabase(pacienteId),
+                listarTratamientosPacienteSupabase(pacienteId),
+                listarRecetasPacienteSupabase(pacienteId),
+                listarCitasPacienteSupabaseDirecto(pacienteId),
+                listarVentasPacienteSupabaseDirecto(pacienteId),
+                listarCuentasPacienteSupabaseDirecto(pacienteId),
+            ]);
+
+            setPaciente(convertirPacienteSupabase(pacienteSupabase));
+            setNotas(notasSupabase.map(convertirNotaClinicaSupabase));
+            setTratamientos(
+                tratamientosSupabase.map(convertirTratamientoSupabase)
+            );
+            setRecetas(recetasSupabase.map(convertirRecetaSupabase));
+            setCitas(citasSupabase);
+            setVentas(ventasSupabase);
+            setCuentas(cuentasSupabase);
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo cargar el perfil del paciente desde Supabase.";
+
+            setPaciente(null);
+            setNotas([]);
+            setTratamientos([]);
+            setRecetas([]);
+            setCitas([]);
+            setVentas([]);
+            setCuentas([]);
+            setErrorPerfil(mensaje);
+        } finally {
+            setCargandoPerfil(false);
+        }
+    }
+
     useEffect(() => {
-        setConfiguracion(obtenerConfiguracionClinica());
-
-        const usuarioGuardado = leerLocalStorage<UsuarioSistema | null>(
-            "usuario_sistema_clinico",
-            null
-        );
-        const listaPacientes = leerLocalStorage<Paciente[]>(
-            "pacientes_sistema_clinico",
-            []
-        );
-
-        setUsuario(usuarioGuardado);
-        setPaciente(listaPacientes.find((item) => item.id === pacienteId) || null);
-
-        setCitas(leerLocalStorage<Cita[]>("citas_sistema_clinico", []));
-        setVentas(leerLocalStorage<Venta[]>("ventas_sistema_clinico", []));
-        setCuentas(
-            leerLocalStorage<CuentaPorCobrar[]>(
-                "cuentas_cobrar_sistema_clinico",
-                []
-            )
-        );
-        setNotas(
-            leerLocalStorage<NotaClinica[]>("notas_clinicas_sistema_clinico", [])
-        );
-        setTratamientos(
-            leerLocalStorage<Tratamiento[]>("tratamientos_sistema_clinico", [])
-        );
-        setRecetas(leerLocalStorage<Receta[]>("recetas_sistema_clinico", []));
+        if (pacienteId) {
+            cargarPerfilPaciente();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pacienteId]);
 
     function actualizarNota<K extends keyof FormularioNota>(
@@ -426,186 +657,144 @@ export default function PerfilPacientePage() {
         }));
     }
 
-    function guardarNotas(nuevaLista: NotaClinica[]) {
-        setNotas(nuevaLista);
-        localStorage.setItem(
-            "notas_clinicas_sistema_clinico",
-            JSON.stringify(nuevaLista)
-        );
-    }
-
-    function guardarTratamientos(nuevaLista: Tratamiento[]) {
-        setTratamientos(nuevaLista);
-        localStorage.setItem(
-            "tratamientos_sistema_clinico",
-            JSON.stringify(nuevaLista)
-        );
-    }
-
-    function guardarRecetas(nuevaLista: Receta[]) {
-        setRecetas(nuevaLista);
-        localStorage.setItem("recetas_sistema_clinico", JSON.stringify(nuevaLista));
-    }
-
-    function registrarNota(event: FormEvent<HTMLFormElement>) {
+    async function registrarNota(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!paciente) return;
 
-        if (!formularioNota.doctor.trim()) {
-            alert("Indica el doctor que atendió.");
-            return;
+        try {
+            await crearNotaClinicaSupabase({
+                paciente_id: paciente.id,
+                doctor_nombre: formularioNota.doctor.trim(),
+                servicio_nombre: formularioNota.servicio.trim(),
+                diagnostico: formularioNota.diagnostico.trim(),
+                procedimiento: formularioNota.procedimiento.trim(),
+                observaciones: formularioNota.observaciones.trim(),
+                proxima_cita: formularioNota.proximaCita,
+            });
+
+            setFormularioNota(formularioNotaVacio);
+            await cargarPerfilPaciente();
+
+            alert("Nota clínica registrada correctamente.");
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo registrar la nota clínica.";
+
+            alert(mensaje);
         }
-
-        if (!formularioNota.diagnostico.trim()) {
-            alert("El diagnóstico es obligatorio.");
-            return;
-        }
-
-        if (!formularioNota.procedimiento.trim()) {
-            alert("El procedimiento realizado es obligatorio.");
-            return;
-        }
-
-        const nuevaNota: NotaClinica = {
-            id: `NOTA-${Date.now()}`,
-            pacienteId: paciente.id,
-            fecha: fechaHoyLocal(),
-            hora: horaActualLocal(),
-            doctor: formularioNota.doctor.trim(),
-            servicio: formularioNota.servicio.trim(),
-            diagnostico: formularioNota.diagnostico.trim(),
-            procedimiento: formularioNota.procedimiento.trim(),
-            observaciones: formularioNota.observaciones.trim(),
-            proximaCita: formularioNota.proximaCita,
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            estado: "Activa",
-        };
-
-        guardarNotas([nuevaNota, ...notas]);
-        setFormularioNota(formularioNotaVacio);
-
-        alert("Nota clínica registrada correctamente.");
     }
 
-    function registrarTratamiento(event: FormEvent<HTMLFormElement>) {
+    async function registrarTratamiento(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!paciente) return;
 
-        if (!formularioTratamiento.nombre.trim()) {
-            alert("El nombre del tratamiento es obligatorio.");
-            return;
+        try {
+            await crearTratamientoSupabase({
+                paciente_id: paciente.id,
+                nombre: formularioTratamiento.nombre.trim(),
+                descripcion: formularioTratamiento.descripcion.trim(),
+                total: numero(formularioTratamiento.total),
+                abonado: numero(formularioTratamiento.abonado),
+                estado: formularioTratamiento.estado,
+            });
+
+            setFormularioTratamiento(formularioTratamientoVacio);
+            await cargarPerfilPaciente();
+
+            alert("Tratamiento registrado correctamente.");
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo registrar el tratamiento.";
+
+            alert(mensaje);
         }
-
-        const total = numero(formularioTratamiento.total);
-        const abonado = numero(formularioTratamiento.abonado);
-
-        if (total < 0 || abonado < 0) {
-            alert("Los montos no pueden ser negativos.");
-            return;
-        }
-
-        if (abonado > total) {
-            alert("El abonado no puede ser mayor que el total.");
-            return;
-        }
-
-        const nuevoTratamiento: Tratamiento = {
-            id: `TRAT-${Date.now()}`,
-            pacienteId: paciente.id,
-            fecha: fechaHoyLocal(),
-            nombre: formularioTratamiento.nombre.trim(),
-            descripcion: formularioTratamiento.descripcion.trim(),
-            total,
-            abonado,
-            estado: formularioTratamiento.estado,
-        };
-
-        guardarTratamientos([nuevoTratamiento, ...tratamientos]);
-        setFormularioTratamiento(formularioTratamientoVacio);
-
-        alert("Tratamiento registrado correctamente.");
     }
 
-    function registrarReceta(event: FormEvent<HTMLFormElement>) {
+    async function registrarReceta(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!paciente) return;
 
-        if (!formularioReceta.doctor.trim()) {
-            alert("Indica el doctor que receta.");
-            return;
+        try {
+            await crearRecetaSupabase({
+                paciente_id: paciente.id,
+                doctor_nombre: formularioReceta.doctor.trim(),
+                diagnostico: formularioNota.diagnostico.trim(),
+                medicamento: formularioReceta.medicamento.trim(),
+                indicaciones: formularioReceta.indicaciones.trim(),
+                duracion: formularioReceta.duracion.trim(),
+                observaciones: formularioReceta.observaciones.trim(),
+            });
+
+            setFormularioReceta(formularioRecetaVacio);
+            await cargarPerfilPaciente();
+
+            alert("Receta registrada correctamente.");
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo registrar la receta.";
+
+            alert(mensaje);
         }
-
-        if (!formularioReceta.medicamento.trim()) {
-            alert("El medicamento es obligatorio.");
-            return;
-        }
-
-        if (!formularioReceta.indicaciones.trim()) {
-            alert("Las indicaciones son obligatorias.");
-            return;
-        }
-
-        const nuevaReceta: Receta = {
-            id: `REC-${Date.now()}`,
-            pacienteId: paciente.id,
-            fecha: fechaHoyLocal(),
-            hora: horaActualLocal(),
-            doctor: formularioReceta.doctor.trim(),
-            doctorNombre: formularioReceta.doctor.trim(),
-            diagnostico: formularioNota.diagnostico.trim(),
-            medicamento: formularioReceta.medicamento.trim(),
-            indicaciones: formularioReceta.indicaciones.trim(),
-            duracion: formularioReceta.duracion.trim(),
-            observaciones: formularioReceta.observaciones.trim(),
-            estado: "Activa",
-        };
-
-        guardarRecetas([nuevaReceta, ...recetas]);
-        setFormularioReceta(formularioRecetaVacio);
-
-        alert("Receta registrada correctamente.");
     }
 
-    function anularNota(id: string) {
+    async function anularNota(id: string) {
         const confirmar = window.confirm("¿Seguro que deseas anular esta nota?");
         if (!confirmar) return;
 
-        const nuevaLista = notas.map((nota) =>
-            nota.id === id ? { ...nota, estado: "Anulada" as const } : nota
-        );
+        try {
+            await anularNotaClinicaSupabase(id);
+            await cargarPerfilPaciente();
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo anular la nota clínica.";
 
-        guardarNotas(nuevaLista);
+            alert(mensaje);
+        }
     }
 
-    function anularReceta(id: string) {
+    async function anularReceta(id: string) {
         const confirmar = window.confirm("¿Seguro que deseas anular esta receta?");
         if (!confirmar) return;
 
-        const nuevaLista = recetas.map((receta) =>
-            receta.id === id ? { ...receta, estado: "Anulada" as const } : receta
+        try {
+            await anularRecetaSupabase(id);
+            await cargarPerfilPaciente();
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo anular la receta.";
 
-        );
-
-        guardarRecetas(nuevaLista);
+            alert(mensaje);
+        }
     }
 
-    function cambiarEstadoTratamiento(
+    async function cambiarEstadoTratamiento(
         id: string,
         estado: Tratamiento["estado"]
     ) {
-        const nuevaLista = tratamientos.map((tratamiento) =>
-            tratamiento.id === id
-                ? {
-                    ...tratamiento,
-                    estado,
-                }
-                : tratamiento
-        );
+        try {
+            await cambiarEstadoTratamientoSupabase(id, estado);
+            await cargarPerfilPaciente();
+        } catch (error) {
+            const mensaje =
+                error instanceof Error
+                    ? error.message
+                    : "No se pudo cambiar el estado del tratamiento.";
 
-        guardarTratamientos(nuevaLista);
+            alert(mensaje);
+        }
     }
 
     const citasPaciente = useMemo(() => {
@@ -719,6 +908,30 @@ export default function PerfilPacientePage() {
         paciente?.medicamentos?.trim()
     );
 
+    if (cargandoPerfil) {
+        return (
+            <AppShell
+                titulo="Perfil del paciente"
+                descripcion="Cargando información clínica desde Supabase"
+                moduloActivo="Pacientes"
+            >
+                <section className="glass-card rounded-3xl p-10 text-center">
+                    <div className="mx-auto flex h-16 w-16 animate-pulse items-center justify-center rounded-3xl bg-teal-50 text-teal-700">
+                        <Activity className="h-8 w-8" />
+                    </div>
+
+                    <h2 className="mt-5 text-2xl font-black text-slate-900">
+                        Cargando paciente
+                    </h2>
+
+                    <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                        Buscando el expediente del paciente en Supabase...
+                    </p>
+                </section>
+            </AppShell>
+        );
+    }
+
     if (!paciente) {
         return (
             <AppShell
@@ -736,8 +949,8 @@ export default function PerfilPacientePage() {
                     </h2>
 
                     <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                        Puede que el paciente haya sido eliminado o que el enlace no sea
-                        válido.
+                        {errorPerfil ||
+                            "Puede que el paciente haya sido eliminado o que el enlace no sea válido."}
                     </p>
 
                     <Link
@@ -755,7 +968,7 @@ export default function PerfilPacientePage() {
     return (
         <AppShell
             titulo={`Perfil: ${paciente.nombre}`}
-            descripcion="Ficha clínica, historial, tratamientos, recetas y estado de cuenta"
+            descripcion="Ficha clínica conectada a Supabase, historial, tratamientos, recetas y estado de cuenta"
             moduloActivo="Pacientes"
         >
             <section className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -850,6 +1063,15 @@ export default function PerfilPacientePage() {
                         Ir a caja
                     </Link>
                 </div>
+            </section>
+
+            <section className="mb-4 rounded-2xl border border-teal-100 bg-teal-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">
+                    Perfil conectado a Supabase
+                </p>
+                <p className="mt-1 text-xs font-semibold text-teal-700">
+                    Paciente, notas, tratamientos, recetas, citas, ventas y cuentas por cobrar se leen desde la base real de la clínica.
+                </p>
             </section>
 
             <section className="overflow-hidden rounded-3xl bg-slate-900 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">

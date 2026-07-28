@@ -3,12 +3,20 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ClipboardList, FileText, Printer } from "lucide-react";
+import {
+    ArrowLeft,
+    ClipboardList,
+    FileText,
+    Printer,
+    RefreshCcw,
+} from "lucide-react";
 import {
     ConfiguracionClinica,
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import { crearClienteSupabase } from "@/lib/supabase/client";
 
 type Paciente = {
     id: string;
@@ -37,20 +45,12 @@ type Tratamiento = {
     estado: "Planificado" | "En proceso" | "Completado" | "Suspendido";
 };
 
-const TRATAMIENTOS_KEY = "tratamientos_sistema_clinico";
-const PACIENTES_KEY = "pacientes_sistema_clinico";
+type Registro = Record<string, unknown>;
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
+function texto(valor: unknown, respaldo = "") {
+    const convertido = String(valor ?? "").trim();
 
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
+    return convertido || respaldo;
 }
 
 function numero(valor: unknown) {
@@ -59,6 +59,14 @@ function numero(valor: unknown) {
     if (Number.isNaN(convertido)) return 0;
 
     return convertido;
+}
+
+function fechaSolo(valor: unknown) {
+    const convertido = texto(valor);
+
+    if (convertido.length >= 10) return convertido.slice(0, 10);
+
+    return "";
 }
 
 function formatoMoneda(valor: number, simbolo = "C$") {
@@ -96,16 +104,118 @@ function calcularEdad(fechaNacimiento: string) {
 }
 
 function tieneAlerta(valor: string) {
-    const texto = valor.trim().toLowerCase();
+    const textoAlerta = valor.trim().toLowerCase();
 
-    if (!texto) return false;
-    if (texto === "no") return false;
-    if (texto === "ninguna") return false;
-    if (texto === "ninguno") return false;
-    if (texto === "no refiere") return false;
-    if (texto === "ninguna registrada") return false;
+    if (!textoAlerta) return false;
+    if (textoAlerta === "no") return false;
+    if (textoAlerta === "ninguna") return false;
+    if (textoAlerta === "ninguno") return false;
+    if (textoAlerta === "no refiere") return false;
+    if (textoAlerta === "ninguna registrada") return false;
 
     return true;
+}
+
+function normalizarEstadoTratamiento(valor: unknown): Tratamiento["estado"] {
+    const estado = texto(valor, "Planificado");
+
+    if (estado === "En proceso") return "En proceso";
+    if (estado === "Completado") return "Completado";
+    if (estado === "Suspendido") return "Suspendido";
+
+    return "Planificado";
+}
+
+function convertirPaciente(data: Registro): Paciente {
+    return {
+        id: texto(data.id),
+        nombre: texto(data.nombre),
+        telefono: texto(data.telefono || data.whatsapp),
+        cedula: texto(data.cedula),
+        fechaNacimiento: texto(data.fecha_nacimiento || data.fechaNacimiento),
+        direccion: texto(data.direccion),
+        alergias: texto(data.alergias),
+        enfermedades: texto(
+            data.enfermedades ||
+            data.enfermedades_sistemicas ||
+            data.enfermedadesSistemicas ||
+            data.antecedentes
+        ),
+        medicamentos: texto(
+            data.medicamentos ||
+            data.medicamentos_actuales ||
+            data.medicamentosActuales
+        ),
+        observaciones: texto(data.observaciones),
+        estado: texto(data.estado, "Activo") === "Inactivo" ? "Inactivo" : "Activo",
+        saldoPendiente: numero(data.saldo_pendiente || data.saldoPendiente),
+        ultimaCita: texto(data.ultima_cita || data.ultimaCita),
+    };
+}
+
+function convertirTratamiento(data: Registro): Tratamiento {
+    return {
+        id: texto(data.id),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        fecha: fechaSolo(data.fecha || data.creado_en || data.creadaEn),
+        nombre: texto(
+            data.nombre ||
+            data.tratamiento ||
+            data.titulo ||
+            data.servicio_nombre ||
+            data.servicioNombre,
+            "Tratamiento odontológico"
+        ),
+        descripcion: texto(
+            data.descripcion ||
+            data.detalle ||
+            data.procedimiento ||
+            data.observaciones,
+            "Sin descripción registrada."
+        ),
+        total: numero(
+            data.total ||
+            data.monto_total ||
+            data.montoTotal ||
+            data.costo ||
+            data.precio
+        ),
+        abonado: numero(
+            data.abonado ||
+            data.monto_abonado ||
+            data.montoAbonado ||
+            data.pagado
+        ),
+        estado: normalizarEstadoTratamiento(data.estado),
+    };
+}
+
+async function obtenerTratamientoDirecto(tratamientoId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("tratamientos")
+        .select("*")
+        .eq("id", tratamientoId)
+        .maybeSingle();
+
+    if (error) throw new Error(error.message);
+
+    return data ? convertirTratamiento(data as Registro) : null;
+}
+
+async function obtenerPacienteDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("pacientes")
+        .select("*")
+        .eq("id", pacienteId)
+        .maybeSingle();
+
+    if (error) throw new Error(error.message);
+
+    return data ? convertirPaciente(data as Registro) : null;
 }
 
 export default function TratamientoImprimiblePage() {
@@ -117,30 +227,75 @@ export default function TratamientoImprimiblePage() {
     );
     const [tratamiento, setTratamiento] = useState<Tratamiento | null>(null);
     const [paciente, setPaciente] = useState<Paciente | null>(null);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const tratamientoEncontrado =
+                await obtenerTratamientoDirecto(tratamientoId);
+
+            if (!tratamientoEncontrado) {
+                setTratamiento(null);
+                setPaciente(null);
+                return;
+            }
+
+            const pacienteEncontrado = tratamientoEncontrado.pacienteId
+                ? await obtenerPacienteDirecto(tratamientoEncontrado.pacienteId)
+                : null;
+
+            setTratamiento(tratamientoEncontrado);
+            setPaciente(pacienteEncontrado);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el tratamiento desde Supabase.";
+
+            setError(mensaje);
+            setTratamiento(null);
+            setPaciente(null);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const config = obtenerConfiguracionClinica();
-        const tratamientos = leerLocalStorage<Tratamiento[]>(
-            TRATAMIENTOS_KEY,
-            []
-        );
-        const pacientes = leerLocalStorage<Paciente[]>(PACIENTES_KEY, []);
-
-        const tratamientoEncontrado =
-            tratamientos.find((item) => item.id === tratamientoId) || null;
-
-        const pacienteEncontrado = tratamientoEncontrado
-            ? pacientes.find((item) => item.id === tratamientoEncontrado.pacienteId) ||
-            null
-            : null;
-
-        setConfiguracion(config);
-        setTratamiento(tratamientoEncontrado);
-        setPaciente(pacienteEncontrado);
+        cargarDatos();
     }, [tratamientoId]);
 
     function imprimir() {
         window.print();
+    }
+
+    if (cargando) {
+        return (
+            <main className="min-h-screen bg-slate-100 p-6">
+                <section className="mx-auto max-w-3xl rounded-3xl bg-white p-10 text-center shadow-sm">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-teal-50 text-teal-700">
+                        <RefreshCcw className="h-8 w-8 animate-spin" />
+                    </div>
+
+                    <h1 className="mt-5 text-2xl font-black text-slate-900">
+                        Cargando tratamiento
+                    </h1>
+
+                    <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                        Consultando el tratamiento y el paciente desde Supabase.
+                    </p>
+                </section>
+            </main>
+        );
     }
 
     if (!tratamiento) {
@@ -156,17 +311,28 @@ export default function TratamientoImprimiblePage() {
                     </h1>
 
                     <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                        No encontramos el tratamiento solicitado. Puede que haya sido
-                        eliminado o que el enlace no sea válido.
+                        {error ||
+                            `No encontramos el tratamiento solicitado en Supabase. ID consultado: ${tratamientoId}`}
                     </p>
 
-                    <Link
-                        href="/pacientes"
-                        className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        Volver a pacientes
-                    </Link>
+                    <div className="mt-6 flex flex-wrap justify-center gap-2">
+                        <Link
+                            href="/pacientes"
+                            className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                            Volver a pacientes
+                        </Link>
+
+                        <button
+                            type="button"
+                            onClick={cargarDatos}
+                            className="inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                        >
+                            <RefreshCcw className="h-4 w-4" />
+                            Reintentar
+                        </button>
+                    </div>
                 </section>
             </main>
         );
@@ -252,6 +418,15 @@ export default function TratamientoImprimiblePage() {
                 </Link>
 
                 <div className="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onClick={cargarDatos}
+                        className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                    >
+                        <RefreshCcw className="h-4 w-4" />
+                        Recargar
+                    </button>
+
                     <Link
                         href={`/expediente/${tratamiento.pacienteId}`}
                         className="flex items-center gap-2 rounded-xl bg-teal-50 px-4 py-3 text-[12px] font-bold text-teal-700 hover:bg-teal-100"
@@ -269,6 +444,15 @@ export default function TratamientoImprimiblePage() {
                         Imprimir / Guardar PDF
                     </button>
                 </div>
+            </section>
+
+            <section className="no-print mx-auto mb-4 max-w-4xl rounded-2xl border border-teal-100 bg-teal-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">
+                    Tratamiento conectado a Supabase
+                </p>
+                <p className="mt-1 text-xs font-semibold text-teal-700">
+                    El tratamiento, el paciente y la configuración se consultan desde la base real de la clínica.
+                </p>
             </section>
 
             <section className="print-document mx-auto max-w-4xl rounded-2xl border border-slate-300 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.10)]">

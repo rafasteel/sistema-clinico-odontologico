@@ -4,25 +4,28 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
     Activity,
+    AlertTriangle,
     ArrowRight,
     Calendar,
     CheckCircle2,
     CreditCard,
     Eye,
     EyeOff,
+    Loader2,
     Lock,
+    LockKeyhole,
+    Mail,
     ShieldCheck,
     Sparkles,
     Stethoscope,
-    User,
     Users,
 } from "lucide-react";
+import { crearClienteSupabase } from "@/lib/supabase/client";
 import {
-    guardarSesion,
-    obtenerUsuariosSistema,
-    UsuarioApp,
-    validarLogin,
-} from "@/lib/usuariosSistema";
+    guardarSesionLocal,
+    limpiarSesionLocal,
+    obtenerPerfilActual,
+} from "@/lib/supabase/perfil";
 import {
     ConfiguracionClinica,
     CONFIGURACION_PREDETERMINADA,
@@ -30,92 +33,147 @@ import {
 } from "@/lib/configuracionClinica";
 
 function colorRol(rol: string) {
+    if (rol === "SUPER_ADMIN") return "bg-purple-50 text-purple-700 border border-purple-100";
     if (rol === "ADMIN") return "bg-slate-900 text-white";
     if (rol === "DOCTOR") return "bg-teal-50 text-teal-700 border border-teal-100";
-    if (rol === "RECEPCION")
-        return "bg-indigo-50 text-indigo-700 border border-indigo-100";
+    if (rol === "RECEPCION") return "bg-indigo-50 text-indigo-700 border border-indigo-100";
 
     return "bg-emerald-50 text-emerald-700 border border-emerald-100";
-}
-
-function iniciales(nombre: string) {
-    const partes = nombre.trim().split(" ").filter(Boolean);
-
-    if (partes.length === 0) return "US";
-    if (partes.length === 1) return partes[0].slice(0, 2).toUpperCase();
-
-    return `${partes[0][0]}${partes[1][0]}`.toUpperCase();
 }
 
 export default function LoginPage() {
     const router = useRouter();
 
-    const [usuario, setUsuario] = useState("");
+    const [correo, setCorreo] = useState("");
     const [password, setPassword] = useState("");
-    const [usuariosDemo, setUsuariosDemo] = useState<UsuarioApp[]>([]);
     const [error, setError] = useState("");
     const [mostrarPassword, setMostrarPassword] = useState(false);
     const [cargando, setCargando] = useState(false);
+    const [verificandoSesion, setVerificandoSesion] = useState(true);
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
         CONFIGURACION_PREDETERMINADA
     );
 
     useEffect(() => {
-        setUsuariosDemo(obtenerUsuariosSistema());
-        setConfiguracion(obtenerConfiguracionClinica());
+        let componenteActivo = true;
 
-        const sesionActiva = localStorage.getItem("usuario_sistema_clinico");
+        const tiempoMaximo = window.setTimeout(() => {
+            if (!componenteActivo) return;
+            limpiarSesionLocal();
+            setVerificandoSesion(false);
+        }, 3500);
 
-        if (!sesionActiva) return;
+        async function revisarSesionActiva() {
+            try {
+                setConfiguracion(obtenerConfiguracionClinica());
 
-        try {
-            const usuarioSesion = JSON.parse(sesionActiva);
+                const { perfil } = await obtenerPerfilActual();
 
-            const rolValido =
-                usuarioSesion.rol === "ADMIN" ||
-                usuarioSesion.rol === "DOCTOR" ||
-                usuarioSesion.rol === "RECEPCION" ||
-                usuarioSesion.rol === "CAJA";
+                if (!componenteActivo) return;
 
-            if (
-                usuarioSesion.usuario &&
-                usuarioSesion.nombre &&
-                rolValido
-            ) {
-                router.replace("/inicio");
-                return;
+                if (perfil && perfil.estado === "Activo") {
+                    guardarSesionLocal(perfil);
+                    router.replace(perfil.rol === "SUPER_ADMIN" ? "/super-admin" : "/inicio");
+                    return;
+                }
+
+                limpiarSesionLocal();
+            } catch (errorRevision) {
+                console.error("Error revisando sesión Supabase:", errorRevision);
+                limpiarSesionLocal();
+            } finally {
+                window.clearTimeout(tiempoMaximo);
+
+                if (componenteActivo) {
+                    setVerificandoSesion(false);
+                }
             }
-
-            localStorage.removeItem("usuario_sistema_clinico");
-        } catch {
-            localStorage.removeItem("usuario_sistema_clinico");
         }
-    }, []);
 
-    function iniciarSesion(event: FormEvent<HTMLFormElement>) {
+        revisarSesionActiva();
+
+        return () => {
+            componenteActivo = false;
+            window.clearTimeout(tiempoMaximo);
+        };
+    }, [router]);
+
+    async function iniciarSesion(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
+
+        const correoLimpio = correo.trim().toLowerCase();
+        const passwordLimpio = password.trim();
+
+        if (!correoLimpio || !passwordLimpio) {
+            setError("Escribí tu correo y contraseña.");
+            return;
+        }
 
         setError("");
         setCargando(true);
 
-        setTimeout(() => {
-            const resultado = validarLogin(usuario, password);
+        try {
+            const supabase = crearClienteSupabase();
 
-            if (!resultado.ok || !resultado.usuario) {
-                setError(resultado.mensaje);
-                setCargando(false);
+            const { error: errorLogin } = await supabase.auth.signInWithPassword({
+                email: correoLimpio,
+                password: passwordLimpio,
+            });
+
+            if (errorLogin) {
+                setError("Correo o contraseña incorrectos.");
                 return;
             }
 
-            guardarSesion(resultado.usuario);
-            router.push("/inicio");
-        }, 450);
+            const { perfil, error: errorPerfil } = await obtenerPerfilActual();
+
+            if (errorPerfil || !perfil) {
+                await supabase.auth.signOut();
+                limpiarSesionLocal();
+                setError(
+                    errorPerfil ||
+                    "El usuario inició sesión, pero no tiene perfil registrado en usuarios_perfiles."
+                );
+                return;
+            }
+
+            if (perfil.estado !== "Activo") {
+                await supabase.auth.signOut();
+                limpiarSesionLocal();
+                setError("Este usuario está inactivo. Contactá al administrador.");
+                return;
+            }
+
+            guardarSesionLocal(perfil);
+            router.push(perfil.rol === "SUPER_ADMIN" ? "/super-admin" : "/inicio");
+        } catch (errorLoginGeneral) {
+            console.error("Error iniciando sesión Supabase:", errorLoginGeneral);
+            limpiarSesionLocal();
+            setError(
+                "No se pudo conectar con Supabase. Revisá NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en .env.local."
+            );
+        } finally {
+            setCargando(false);
+        }
     }
 
-    function llenarDemo(usuarioDemo: UsuarioApp) {
-        setUsuario(usuarioDemo.usuario);
-        setPassword(usuarioDemo.password);
-        setError("");
+    if (verificandoSesion) {
+        return (
+            <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#F4F7FA] px-4 text-slate-900">
+                <div className="pointer-events-none absolute left-[-120px] top-[-120px] h-[360px] w-[360px] rounded-full bg-teal-400/20 blur-3xl" />
+                <div className="pointer-events-none absolute bottom-[-140px] right-[-100px] h-[420px] w-[420px] rounded-full bg-cyan-400/20 blur-3xl" />
+
+                <div className="glass-panel rounded-[32px] bg-white p-8 text-center shadow-[0_24px_80px_rgba(15,23,42,0.10)]">
+                    <Loader2 className="mx-auto h-9 w-9 animate-spin text-teal-600" />
+                    <h1 className="mt-4 text-lg font-black text-slate-900">
+                        Verificando sesión
+                    </h1>
+                    <p className="mt-1 text-sm font-medium text-slate-500">
+                        Validando acceso con Supabase Auth...
+                    </p>
+                </div>
+            </main>
+        );
     }
 
     return (
@@ -192,9 +250,9 @@ export default function LoginPage() {
 
                                 <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 backdrop-blur">
                                     <ShieldCheck className="h-6 w-6 text-indigo-300" />
-                                    <h3 className="mt-4 font-bold">Respaldo y seguridad</h3>
+                                    <h3 className="mt-4 font-bold">Seguridad real</h3>
                                     <p className="mt-2 text-sm leading-6 text-white/45">
-                                        Usuarios, auditoría, exportaciones y copias.
+                                        Acceso con Supabase Auth, roles y multi-clínica.
                                     </p>
                                 </div>
                             </div>
@@ -205,7 +263,7 @@ export default function LoginPage() {
                                         Estado del sistema
                                     </p>
                                     <p className="mt-1 text-sm font-semibold text-white">
-                                        Plataforma lista para operar
+                                        Conectado a Supabase
                                     </p>
                                 </div>
 
@@ -232,7 +290,7 @@ export default function LoginPage() {
                                     </h2>
 
                                     <p className="mt-2 text-sm leading-6 text-slate-500">
-                                        Inicia sesión para entrar al sistema clínico.
+                                        Inicia sesión con tu correo y contraseña.
                                     </p>
                                 </div>
 
@@ -249,15 +307,17 @@ export default function LoginPage() {
                             <form onSubmit={iniciarSesion} className="mt-8 space-y-5">
                                 <div>
                                     <label className="mb-2 block text-sm font-bold text-slate-700">
-                                        Usuario
+                                        Correo electrónico
                                     </label>
 
                                     <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 focus-within:border-teal-400 focus-within:bg-white focus-within:ring-4 focus-within:ring-teal-100">
-                                        <User className="h-5 w-5 shrink-0 text-slate-400" />
+                                        <Mail className="h-5 w-5 shrink-0 text-slate-400" />
                                         <input
-                                            value={usuario}
-                                            onChange={(event) => setUsuario(event.target.value)}
-                                            placeholder="Ejemplo: admin"
+                                            value={correo}
+                                            onChange={(event) => setCorreo(event.target.value)}
+                                            type="email"
+                                            placeholder="correo@clinica.com"
+                                            autoComplete="email"
                                             className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none placeholder:font-medium"
                                         />
                                     </div>
@@ -275,6 +335,7 @@ export default function LoginPage() {
                                             onChange={(event) => setPassword(event.target.value)}
                                             type={mostrarPassword ? "text" : "password"}
                                             placeholder="Contraseña"
+                                            autoComplete="current-password"
                                             className="w-full bg-transparent text-sm font-semibold text-slate-800 outline-none placeholder:font-medium"
                                         />
 
@@ -293,8 +354,13 @@ export default function LoginPage() {
                                 </div>
 
                                 {error && (
-                                    <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
-                                        {error}
+                                    <div className="rounded-2xl border border-red-100 bg-red-50 px-4 py-3">
+                                        <div className="flex items-start gap-3">
+                                            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+                                            <p className="text-sm font-bold leading-6 text-red-700">
+                                                {error}
+                                            </p>
+                                        </div>
                                     </div>
                                 )}
 
@@ -304,67 +370,76 @@ export default function LoginPage() {
                                     className="flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-4 text-sm font-black text-white shadow-lg shadow-teal-500/25 hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-70"
                                 >
                                     {cargando ? "Validando acceso..." : "Entrar al sistema"}
-                                    {!cargando && <ArrowRight className="h-4 w-4" />}
+                                    {cargando ? (
+                                        <Loader2 className="h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <ArrowRight className="h-4 w-4" />
+                                    )}
                                 </button>
                             </form>
 
                             <div className="mt-8">
                                 <div className="flex items-center justify-between">
                                     <p className="text-sm font-black text-slate-800">
-                                        Usuarios disponibles
+                                        Acceso configurado
                                     </p>
 
                                     <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-bold text-slate-500">
-                                        Demo
+                                        Supabase
                                     </span>
                                 </div>
 
                                 <div className="mt-4 grid gap-3">
-                                    {usuariosDemo.map((usuarioDemo) => (
-                                        <button
-                                            key={usuarioDemo.id}
-                                            type="button"
-                                            onClick={() => llenarDemo(usuarioDemo)}
-                                            className="group flex items-center gap-3 rounded-3xl border border-slate-200 bg-white p-3 text-left shadow-sm hover:border-teal-200 hover:bg-teal-50/40 hover:shadow-md"
-                                        >
-                                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-xs font-black text-white group-hover:bg-gradient-to-br group-hover:from-teal-600 group-hover:to-cyan-600">
-                                                {iniciales(usuarioDemo.nombre)}
+                                    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+                                        <div className="flex items-start gap-3">
+                                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-white">
+                                                <ShieldCheck className="h-5 w-5" />
                                             </div>
 
                                             <div className="min-w-0 flex-1">
-                                                <p className="truncate text-sm font-black text-slate-800">
-                                                    {usuarioDemo.nombre}
+                                                <p className="text-sm font-black text-slate-800">
+                                                    Usuarios reales
                                                 </p>
-                                                <p className="mt-0.5 text-xs font-medium text-slate-400">
-                                                    {usuarioDemo.usuario} · {usuarioDemo.password}
+                                                <p className="mt-1 text-xs leading-5 text-slate-500">
+                                                    El acceso ahora se valida con Supabase Auth y la
+                                                    tabla usuarios_perfiles.
                                                 </p>
                                             </div>
 
-                                            <span
-                                                className={`rounded-full px-3 py-1 text-[10px] font-black ${colorRol(
-                                                    usuarioDemo.rol
-                                                )}`}
-                                            >
-                                                {usuarioDemo.rol}
+                                            <span className={`rounded-full px-3 py-1 text-[10px] font-black ${colorRol("SUPER_ADMIN")}`}>
+                                                SUPER_ADMIN
                                             </span>
+                                        </div>
+                                    </div>
 
-                                            {usuarioDemo.estado === "Activo" ? (
-                                                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" />
-                                            ) : (
-                                                <span className="rounded-full bg-red-50 px-2 py-1 text-[10px] font-bold text-red-600">
-                                                    Inactivo
-                                                </span>
-                                            )}
-                                        </button>
-                                    ))}
+                                    <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+                                        <div className="flex items-start gap-3">
+                                            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-teal-50 text-teal-700">
+                                                <LockKeyhole className="h-5 w-5" />
+                                            </div>
+
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-black text-slate-800">
+                                                    Redirección automática
+                                                </p>
+                                                <p className="mt-1 text-xs leading-5 text-slate-500">
+                                                    SUPER_ADMIN entra a /super-admin. Los usuarios de
+                                                    clínica entran a /inicio.
+                                                </p>
+                                            </div>
+
+                                            <CheckCircle2 className="mt-1 h-4 w-4 shrink-0 text-emerald-500" />
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
-                            <div className="mt-6 rounded-3xl border border-amber-100 bg-amber-50 p-4">
-                                <p className="text-xs font-semibold leading-5 text-amber-800">
-                                    Etapa de desarrollo: las contraseñas se guardan localmente en
-                                    este navegador. Cuando conectemos Supabase, usaremos
-                                    autenticación segura real.
+                            <div className="mt-6 rounded-3xl border border-blue-100 bg-blue-50 p-4">
+                                <p className="text-xs font-semibold leading-5 text-blue-800">
+                                    Etapa Supabase: las contraseñas ya no se guardan en localStorage.
+                                    El sistema mantiene una sesión local temporal solo para que los
+                                    módulos actuales sigan funcionando mientras migramos todo a base
+                                    de datos.
                                 </p>
                             </div>
                         </div>

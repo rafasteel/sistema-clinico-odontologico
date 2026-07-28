@@ -3,12 +3,30 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, FileText, Printer, ReceiptText, UserRound } from "lucide-react";
+import {
+    ArrowLeft,
+    FileText,
+    Loader2,
+    Printer,
+    UserRound,
+} from "lucide-react";
 import {
     ConfiguracionClinica,
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    obtenerPacienteSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
+import {
+    listarAbonosCuentaSupabase,
+    listarCuentasPacienteSupabase,
+    type AbonoCuentaSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+} from "@/lib/supabase/finanzas";
 
 type Paciente = {
     id: string;
@@ -26,9 +44,9 @@ type Paciente = {
     ultimaCita: string;
 };
 
-type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia";
+type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia" | "Mixto";
 
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
+type EstadoCuenta = EstadoCuentaCobrarSupabase;
 
 type AbonoCuenta = {
     id: string;
@@ -47,6 +65,7 @@ type CuentaPorCobrar = {
     pacienteNombre: string;
     concepto: string;
     total: number;
+    abonado: number;
     saldo: number;
     fecha: string;
     fechaVencimiento: string;
@@ -66,9 +85,6 @@ type AbonoListado = AbonoCuenta & {
     concepto: string;
 };
 
-const PACIENTES_KEY = "pacientes_sistema_clinico";
-const CUENTAS_KEY = "cuentas_cobrar_sistema_clinico";
-
 function fechaHoyLocal() {
     const fecha = new Date();
     const year = fecha.getFullYear();
@@ -78,25 +94,16 @@ function fechaHoyLocal() {
     return `${year}-${month}-${day}`;
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
 function numero(valor: unknown) {
     const convertido = Number(valor || 0);
 
     if (Number.isNaN(convertido)) return 0;
 
     return convertido;
+}
+
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
 }
 
 function formatoMoneda(valor: number, simbolo = "C$") {
@@ -128,11 +135,72 @@ function obtenerEstadoVisual(cuenta: CuentaPorCobrar): EstadoCuenta {
         return "Vencida";
     }
 
-    if ((cuenta.abonos || []).length > 0 || cuenta.saldo < cuenta.total) {
+    if ((cuenta.abonado || 0) > 0 || cuenta.saldo < cuenta.total) {
         return "Parcial";
     }
 
     return "Pendiente";
+}
+
+function metodoPago(valor: string): MetodoPago {
+    if (valor === "Efectivo") return "Efectivo";
+    if (valor === "Tarjeta") return "Tarjeta";
+    if (valor === "Transferencia") return "Transferencia";
+
+    return "Mixto";
+}
+
+function convertirPaciente(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "",
+        enfermedades:
+            paciente.enfermedades_sistemicas ||
+            paciente.antecedentes ||
+            "",
+        medicamentos: paciente.medicamentos_actuales || "",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
+}
+
+function convertirAbono(abono: AbonoCuentaSupabase): AbonoCuenta {
+    return {
+        id: abono.id,
+        fecha: abono.fecha,
+        hora: horaCorta(abono.hora),
+        monto: Number(abono.monto || 0),
+        metodo: metodoPago(abono.metodo),
+        observaciones: abono.observaciones || "",
+        usuarioNombre: abono.usuario_nombre || "",
+    };
+}
+
+function convertirCuenta(
+    cuenta: CuentaCobrarSupabase,
+    abonos: AbonoCuenta[]
+): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: Number(cuenta.total || 0),
+        abonado: Number(cuenta.abonado || 0),
+        saldo: Number(cuenta.saldo || 0),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+        abonos,
+    };
 }
 
 export default function EstadoCuentaPacientePage() {
@@ -144,44 +212,66 @@ export default function EstadoCuentaPacientePage() {
     );
     const [paciente, setPaciente] = useState<Paciente | null>(null);
     const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([]);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const pacienteSupabase = await obtenerPacienteSupabase(pacienteId);
+            const cuentasSupabase = await listarCuentasPacienteSupabase(pacienteId);
+
+            const cuentasConAbonos = await Promise.all(
+                cuentasSupabase.map(async (cuenta) => {
+                    const abonosSupabase = await listarAbonosCuentaSupabase(cuenta.id);
+
+                    return convertirCuenta(
+                        cuenta,
+                        abonosSupabase.map(convertirAbono)
+                    );
+                })
+            );
+
+            setPaciente(convertirPaciente(pacienteSupabase));
+            setCuentas(cuentasConAbonos);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el estado de cuenta desde Supabase.";
+
+            setError(mensaje);
+            setPaciente(null);
+            setCuentas([]);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const config = obtenerConfiguracionClinica();
-        const pacientes = leerLocalStorage<Paciente[]>(PACIENTES_KEY, []);
-        const cuentasGuardadas = leerLocalStorage<CuentaPorCobrar[]>(CUENTAS_KEY, []);
+        if (!pacienteId) return;
 
-        const pacienteEncontrado =
-            pacientes.find((item) => item.id === pacienteId) || null;
-
-        setConfiguracion(config);
-        setPaciente(pacienteEncontrado);
-        setCuentas(cuentasGuardadas);
+        cargarDatos();
     }, [pacienteId]);
 
     const cuentasPaciente = useMemo<CuentaNormalizada[]>(() => {
         return cuentas
-            .filter(
-                (cuenta) =>
-                    cuenta.pacienteId === pacienteId ||
-                    cuenta.pacienteNombre?.toLowerCase() ===
-                    (paciente?.nombre || "").toLowerCase()
-            )
-            .map((cuenta) => {
-                const abonos = cuenta.abonos || [];
-                const abonado = abonos.reduce(
-                    (total, abono) => total + numero(abono.monto),
-                    0
-                );
-
-                return {
-                    ...cuenta,
-                    abonos,
-                    abonado,
-                    estadoVisual: obtenerEstadoVisual(cuenta),
-                };
-            })
+            .map((cuenta) => ({
+                ...cuenta,
+                abonos: cuenta.abonos || [],
+                abonado: numero(cuenta.abonado),
+                estadoVisual: obtenerEstadoVisual(cuenta),
+            }))
             .sort((a, b) => b.fecha.localeCompare(a.fecha));
-    }, [cuentas, pacienteId, paciente]);
+    }, [cuentas]);
 
     const cuentasActivas = cuentasPaciente.filter(
         (cuenta) =>
@@ -229,6 +319,26 @@ export default function EstadoCuentaPacientePage() {
         window.print();
     }
 
+    if (cargando) {
+        return (
+            <main className="min-h-screen bg-slate-100 p-6">
+                <section className="mx-auto max-w-3xl rounded-3xl bg-white p-10 text-center shadow-sm">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-teal-50 text-teal-700">
+                        <Loader2 className="h-8 w-8 animate-spin" />
+                    </div>
+
+                    <h1 className="mt-5 text-2xl font-black text-slate-900">
+                        Cargando estado de cuenta
+                    </h1>
+
+                    <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                        Consultando paciente, cuentas y abonos desde Supabase.
+                    </p>
+                </section>
+            </main>
+        );
+    }
+
     if (!paciente) {
         return (
             <main className="min-h-screen bg-slate-100 p-6">
@@ -242,8 +352,8 @@ export default function EstadoCuentaPacientePage() {
                     </h1>
 
                     <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                        No encontramos el paciente solicitado para generar el estado de
-                        cuenta.
+                        {error ||
+                            "No encontramos el paciente solicitado para generar el estado de cuenta."}
                     </p>
 
                     <Link

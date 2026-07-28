@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
     Activity,
+    AlertTriangle,
     Bell,
     Calendar,
     CreditCard,
@@ -38,9 +39,16 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import { generarNotificacionesSistema } from "@/lib/notificacionesSistema";
+import { crearClienteSupabase } from "@/lib/supabase/client";
+import {
+    verificarLicenciaClinica,
+    type LicenciaClinica,
+} from "@/lib/supabase/licencia";
 
-type RolUsuario = "ADMIN" | "DOCTOR" | "RECEPCION" | "CAJA";
+type RolUsuario = "SUPER_ADMIN" | "ADMIN" | "DOCTOR" | "RECEPCION" | "CAJA";
+type RolUsuarioClinica = Exclude<RolUsuario, "SUPER_ADMIN">;
 
 type UsuarioSistema = {
     usuario: string;
@@ -231,6 +239,75 @@ function fechaActual() {
     });
 }
 
+const USUARIO_SESION_KEY = "usuario_sistema_clinico";
+const MENU_COLAPSADO_KEY = MENU_COLAPSADO_KEY;
+const NOTIFICACIONES_REVISADAS_KEY = NOTIFICACIONES_REVISADAS_KEY;
+
+function esRolUsuario(valor: unknown): valor is RolUsuario {
+    return (
+        valor === "SUPER_ADMIN" ||
+        valor === "ADMIN" ||
+        valor === "DOCTOR" ||
+        valor === "RECEPCION" ||
+        valor === "CAJA"
+    );
+}
+
+function obtenerUsuarioSesionRapida(): UsuarioSistema | null {
+    if (typeof window === "undefined") return null;
+
+    try {
+        const usuarioGuardado = localStorage.getItem(USUARIO_SESION_KEY);
+        if (!usuarioGuardado) return null;
+
+        const usuarioActual = JSON.parse(usuarioGuardado) as Partial<UsuarioSistema>;
+
+        if (
+            !usuarioActual.usuario ||
+            !usuarioActual.nombre ||
+            !esRolUsuario(usuarioActual.rol)
+        ) {
+            return null;
+        }
+
+        return {
+            usuario: usuarioActual.usuario,
+            nombre: usuarioActual.nombre,
+            rol: usuarioActual.rol,
+        };
+    } catch {
+        return null;
+    }
+}
+
+function obtenerAvisoLicencia(licencia: LicenciaClinica | null) {
+    if (!licencia) return null;
+
+    if (licencia.estadoAcceso === "Vencido") {
+        return {
+            titulo: "Suscripción vencida",
+            descripcion:
+                licencia.mensaje ||
+                "La suscripción está vencida, pero todavía está dentro del período de gracia.",
+            clases: "border-amber-100 bg-amber-50 text-amber-800",
+            icono: "text-amber-700",
+        };
+    }
+
+    if (licencia.estadoAcceso === "Restringido") {
+        return {
+            titulo: "Cuenta en modo restringido",
+            descripcion:
+                licencia.mensaje ||
+                "La cuenta tiene restricciones administrativas. Regularizá el pago para mantener acceso completo.",
+            clases: "border-orange-100 bg-orange-50 text-orange-800",
+            icono: "text-orange-700",
+        };
+    }
+
+    return null;
+}
+
 export default function AppShell({
     titulo,
     descripcion,
@@ -240,77 +317,139 @@ export default function AppShell({
     const router = useRouter();
     const pathname = usePathname();
 
-    const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
-    const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
-        CONFIGURACION_PREDETERMINADA
+    const [usuario, setUsuario] = useState<UsuarioSistema | null>(() =>
+        obtenerUsuarioSesionRapida()
     );
-    const [cargando, setCargando] = useState(true);
+    const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(() => {
+        if (typeof window === "undefined") return CONFIGURACION_PREDETERMINADA;
+
+        return obtenerConfiguracionClinica();
+    });
+    const [cargando, setCargando] = useState(() => {
+        if (typeof window === "undefined") return true;
+
+        return !obtenerUsuarioSesionRapida();
+    });
     const [menuMovil, setMenuMovil] = useState(false);
-    const [menuColapsado, setMenuColapsado] = useState(false);
+    const [menuColapsado, setMenuColapsado] = useState(() => {
+        if (typeof window === "undefined") return false;
+
+        return localStorage.getItem(MENU_COLAPSADO_KEY) === "true";
+    });
     const [notificacionesPendientes, setNotificacionesPendientes] = useState(0);
     const [busquedaGlobal, setBusquedaGlobal] = useState("");
+    const [licenciaClinica, setLicenciaClinica] =
+        useState<LicenciaClinica | null>(null);
 
     useEffect(() => {
-        const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+        let componenteActivo = true;
 
-        const menuGuardado = localStorage.getItem(
-            "menu_colapsado_sistema_clinico"
-        );
+        async function cargarSistema() {
+            const usuarioActual = obtenerUsuarioSesionRapida();
 
-        setMenuColapsado(menuGuardado === "true");
-
-        if (!usuarioGuardado) {
-            setCargando(false);
-            router.replace("/login");
-            return;
-        }
-
-        try {
-            const usuarioActual = JSON.parse(usuarioGuardado) as UsuarioSistema;
-
-            const rolValido =
-                usuarioActual.rol === "ADMIN" ||
-                usuarioActual.rol === "DOCTOR" ||
-                usuarioActual.rol === "RECEPCION" ||
-                usuarioActual.rol === "CAJA";
-
-            if (!usuarioActual.usuario || !usuarioActual.nombre || !rolValido) {
-                localStorage.removeItem("usuario_sistema_clinico");
+            if (!usuarioActual) {
+                localStorage.removeItem(USUARIO_SESION_KEY);
+                setUsuario(null);
                 setCargando(false);
                 router.replace("/login");
                 return;
             }
 
-            setUsuario(usuarioActual);
-            setConfiguracion(obtenerConfiguracionClinica());
-
-            try {
-                const notificaciones = generarNotificacionesSistema(usuarioActual);
-                const revisadasRaw = localStorage.getItem(
-                    "notificaciones_revisadas_sistema_clinico"
-                );
-
-                let revisadas: string[] = [];
-
-                if (revisadasRaw) {
-                    revisadas = JSON.parse(revisadasRaw) as string[];
-                }
-
-                const pendientes = notificaciones.filter(
-                    (item) => !revisadas.includes(item.id)
-                );
-
-                setNotificacionesPendientes(pendientes.length);
-            } catch {
-                setNotificacionesPendientes(0);
+            if (usuarioActual.rol === "SUPER_ADMIN") {
+                setUsuario(usuarioActual);
+                setCargando(false);
+                router.replace("/super-admin");
+                return;
             }
 
+            // Pintamos el sistema de inmediato usando la sesión local ya validada.
+            // Luego se confirma licencia/configuración con Supabase en segundo plano.
+            setUsuario(usuarioActual);
+            setMenuColapsado(localStorage.getItem(MENU_COLAPSADO_KEY) === "true");
             setCargando(false);
-        } catch {
-            localStorage.removeItem("usuario_sistema_clinico");
-            setCargando(false);
-            router.replace("/login");
+
+            try {
+                const licencia = await verificarLicenciaClinica();
+
+                if (!componenteActivo) return;
+
+                if (
+                    licencia.estadoAcceso === "SinPerfil" ||
+                    licencia.estadoAcceso === "Error"
+                ) {
+                    localStorage.removeItem(USUARIO_SESION_KEY);
+                    setCargando(false);
+                    router.replace("/login");
+                    return;
+                }
+
+                if (!licencia.permitido) {
+                    setUsuario(usuarioActual);
+                    setLicenciaClinica(licencia);
+                    setCargando(false);
+                    router.replace("/suspendido");
+                    return;
+                }
+
+                setUsuario(usuarioActual);
+                setLicenciaClinica(licencia);
+
+                let configuracionActual = obtenerConfiguracionClinica();
+
+                try {
+                    configuracionActual = await obtenerConfiguracionClinicaSupabase();
+                } catch {
+                    // Si Supabase no responde, usamos la configuración local como respaldo.
+                }
+
+                if (!componenteActivo) return;
+
+                setConfiguracion({
+                    ...configuracionActual,
+                    nombreClinica:
+                        configuracionActual.nombreClinica ||
+                        licencia.clinica?.nombre ||
+                        configuracionActual.nombreClinica,
+                });
+
+                try {
+                    const notificaciones = generarNotificacionesSistema({
+                        usuario: usuarioActual.usuario,
+                        nombre: usuarioActual.nombre,
+                        rol: usuarioActual.rol as RolUsuarioClinica,
+                    });
+                    const revisadasRaw = localStorage.getItem(
+                        NOTIFICACIONES_REVISADAS_KEY
+                    );
+
+                    let revisadas: string[] = [];
+
+                    if (revisadasRaw) {
+                        revisadas = JSON.parse(revisadasRaw) as string[];
+                    }
+
+                    const pendientes = notificaciones.filter(
+                        (item) => !revisadas.includes(item.id)
+                    );
+
+                    setNotificacionesPendientes(pendientes.length);
+                } catch {
+                    setNotificacionesPendientes(0);
+                }
+
+                setCargando(false);
+            } catch {
+                localStorage.removeItem(USUARIO_SESION_KEY);
+                setCargando(false);
+                router.replace("/login");
+            }
         }
+
+        cargarSistema();
+
+        return () => {
+            componenteActivo = false;
+        };
     }, [router]);
 
     const modulosPermitidos = useMemo(() => {
@@ -349,9 +488,17 @@ export default function AppShell({
     }, [moduloActivo, pathname]);
 
     const IconoModulo = moduloActual.icono;
+    const avisoLicencia = obtenerAvisoLicencia(licenciaClinica);
 
-    function cerrarSesion() {
-        localStorage.removeItem("usuario_sistema_clinico");
+    async function cerrarSesion() {
+        try {
+            const supabase = crearClienteSupabase();
+            await supabase.auth.signOut();
+        } catch {
+            // Si Supabase no responde, limpiamos la sesión local igual.
+        }
+
+        localStorage.removeItem(USUARIO_SESION_KEY);
         router.replace("/login");
     }
 
@@ -359,7 +506,7 @@ export default function AppShell({
         setMenuColapsado((valorActual) => {
             const nuevoValor = !valorActual;
             localStorage.setItem(
-                "menu_colapsado_sistema_clinico",
+                MENU_COLAPSADO_KEY,
                 String(nuevoValor)
             );
             return nuevoValor;
@@ -484,8 +631,8 @@ export default function AppShell({
                                                 href={modulo.href}
                                                 title={modulo.nombre}
                                                 className={`group relative flex w-full items-center rounded-xl text-left transition-all duration-200 ${menuColapsado
-                                                        ? "justify-center px-3 py-3"
-                                                        : "gap-3 px-3 py-2.5"
+                                                    ? "justify-center px-3 py-3"
+                                                    : "gap-3 px-3 py-2.5"
                                                     } ${activo
                                                         ? "bg-teal-500/15 text-teal-200"
                                                         : "text-white/40 hover:bg-white/[0.04] hover:text-white/75"
@@ -632,6 +779,26 @@ export default function AppShell({
                     </header>
 
                     <main className="flex-1 space-y-4 overflow-y-auto pb-2">
+                        {avisoLicencia && (
+                            <section
+                                className={`rounded-2xl border px-5 py-4 ${avisoLicencia.clases}`}
+                            >
+                                <div className="flex items-start gap-3">
+                                    <AlertTriangle
+                                        className={`mt-0.5 h-5 w-5 shrink-0 ${avisoLicencia.icono}`}
+                                    />
+                                    <div>
+                                        <h3 className="text-sm font-black">
+                                            {avisoLicencia.titulo}
+                                        </h3>
+                                        <p className="mt-1 text-xs leading-5">
+                                            {avisoLicencia.descripcion}
+                                        </p>
+                                    </div>
+                                </div>
+                            </section>
+                        )}
+
                         <section className="relative overflow-hidden rounded-2xl border border-teal-200/50 bg-gradient-to-r from-teal-500/10 via-cyan-500/10 to-indigo-500/10 px-7 py-5">
                             <div className="relative z-10 flex items-center gap-4">
                                 <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/70 text-teal-700 shadow-sm">
@@ -767,8 +934,8 @@ export default function AppShell({
                                                         href={modulo.href}
                                                         onClick={() => setMenuMovil(false)}
                                                         className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm ${activo
-                                                                ? "bg-teal-500/15 text-teal-200"
-                                                                : "text-white/45"
+                                                            ? "bg-teal-500/15 text-teal-200"
+                                                            : "text-white/45"
                                                             }`}
                                                     >
                                                         <Icono className="h-4 w-4" />
@@ -804,6 +971,26 @@ export default function AppShell({
                 )}
 
                 <main className="flex-1 overflow-y-auto px-4 pb-28 pt-4">
+                    {avisoLicencia && (
+                        <section
+                            className={`mb-4 rounded-2xl border px-4 py-3 ${avisoLicencia.clases}`}
+                        >
+                            <div className="flex items-start gap-3">
+                                <AlertTriangle
+                                    className={`mt-0.5 h-4 w-4 shrink-0 ${avisoLicencia.icono}`}
+                                />
+                                <div>
+                                    <h3 className="text-xs font-black">
+                                        {avisoLicencia.titulo}
+                                    </h3>
+                                    <p className="mt-1 text-[11px] leading-5">
+                                        {avisoLicencia.descripcion}
+                                    </p>
+                                </div>
+                            </div>
+                        </section>
+                    )}
+
                     <section className="mb-4 overflow-hidden rounded-2xl border border-teal-200/50 bg-gradient-to-r from-teal-500/10 via-cyan-500/10 to-indigo-500/10 px-5 py-4">
                         <p className="mono mb-1 text-[9px] font-bold uppercase tracking-[0.16em] text-teal-700">
                             Módulo activo
@@ -853,16 +1040,16 @@ export default function AppShell({
                                         >
                                             <Icono
                                                 className={`h-[17px] w-[17px] ${activo
-                                                        ? "text-teal-200"
-                                                        : "text-white/35"
+                                                    ? "text-teal-200"
+                                                    : "text-white/35"
                                                     }`}
                                             />
                                         </div>
 
                                         <span
                                             className={`text-[9px] font-medium ${activo
-                                                    ? "text-teal-200"
-                                                    : "text-white/30"
+                                                ? "text-teal-200"
+                                                : "text-white/30"
                                                 }`}
                                         >
                                             {item.texto}

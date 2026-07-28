@@ -14,7 +14,9 @@ import {
     Edit3,
     Filter,
     Plus,
+    RefreshCcw,
     Search,
+    ShieldAlert,
     Stethoscope,
     Trash2,
     UserRound,
@@ -26,6 +28,25 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    listarPacientesSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
+import {
+    listarDoctoresSupabase,
+    listarServiciosSupabase,
+    type DoctorSupabase,
+    type ServicioSupabase,
+} from "@/lib/supabase/doctoresServicios";
+import {
+    actualizarCitaSupabase,
+    cambiarEstadoCitaSupabase,
+    crearCitasSupabase,
+    listarCitasSupabase,
+    type CitaSupabase,
+    type EstadoCitaSupabase,
+} from "@/lib/supabase/citas";
 
 type Paciente = {
     id: string;
@@ -63,17 +84,6 @@ type Servicio = {
     estado: "Activo" | "Inactivo";
 };
 
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cobrada"
-    | "Reagendada"
-    | "Cancelada"
-    | "No asistió";
-
 type Cita = {
     id: string;
     pacienteId: string;
@@ -85,11 +95,12 @@ type Cita = {
     costo: number;
     fecha: string;
     hora: string;
+    duracionMinutos: number;
     recurrencia: string;
-    estado: EstadoCita;
+    estado: EstadoCitaSupabase;
     observaciones: string;
     creadaEn: string;
-    serieId?: string;
+    citaOrigenId?: string | null;
     repeticion?: number;
     totalRepeticiones?: number;
 };
@@ -105,114 +116,6 @@ type FormularioCita = {
     observaciones: string;
 };
 
-const pacientesIniciales: Paciente[] = [
-    {
-        id: "1",
-        nombre: "María López",
-        telefono: "8888-1122",
-        cedula: "001-010190-0000A",
-        fechaNacimiento: "1990-01-01",
-        direccion: "Managua, Nicaragua",
-        alergias: "Penicilina",
-        enfermedades: "Ninguna registrada",
-        medicamentos: "No refiere",
-        observaciones: "Paciente frecuente. Prefiere citas por la mañana.",
-        estado: "Activo",
-        saldoPendiente: 0,
-        ultimaCita: "",
-    },
-    {
-        id: "2",
-        nombre: "Carlos Hernández",
-        telefono: "7777-3344",
-        cedula: "001-150285-0001B",
-        fechaNacimiento: "1985-02-15",
-        direccion: "Masaya, Nicaragua",
-        alergias: "No refiere",
-        enfermedades: "Hipertensión controlada",
-        medicamentos: "Losartán",
-        observaciones: "Controlar presión antes de procedimientos.",
-        estado: "Activo",
-        saldoPendiente: 1500,
-        ultimaCita: "",
-    },
-    {
-        id: "3",
-        nombre: "Fernanda Ruiz",
-        telefono: "8555-9988",
-        cedula: "001-100300-0002C",
-        fechaNacimiento: "2000-03-10",
-        direccion: "Carretera Sur, Managua",
-        alergias: "No refiere",
-        enfermedades: "No refiere",
-        medicamentos: "No refiere",
-        observaciones: "Interesada en tratamiento estético.",
-        estado: "Activo",
-        saldoPendiente: 0,
-        ultimaCita: "",
-    },
-];
-
-const doctoresIniciales: Doctor[] = [
-    {
-        id: "1",
-        nombre: "Dra. Ana Martínez",
-        especialidad: "Odontología general",
-        telefono: "8888-0001",
-        correo: "ana@clinica.com",
-        horario: "Lunes a viernes 8:00 AM - 5:00 PM",
-        estado: "Activo",
-    },
-    {
-        id: "2",
-        nombre: "Dr. Luis Ramírez",
-        especialidad: "Endodoncia",
-        telefono: "8888-0002",
-        correo: "luis@clinica.com",
-        horario: "Martes y jueves 9:00 AM - 4:00 PM",
-        estado: "Activo",
-    },
-];
-
-const serviciosIniciales: Servicio[] = [
-    {
-        id: "1",
-        nombre: "Limpieza dental",
-        categoria: "Prevención",
-        duracionMinutos: 45,
-        precio: 1200,
-        descripcion: "Profilaxis dental básica.",
-        estado: "Activo",
-    },
-    {
-        id: "2",
-        nombre: "Extracción dental",
-        categoria: "Cirugía",
-        duracionMinutos: 60,
-        precio: 2500,
-        descripcion: "Extracción simple.",
-        estado: "Activo",
-    },
-    {
-        id: "3",
-        nombre: "Restauración con resina",
-        categoria: "Operatoria",
-        duracionMinutos: 50,
-        precio: 1800,
-        descripcion: "Restauración estética.",
-        estado: "Activo",
-    },
-    {
-        id: "4",
-        nombre: "Endodoncia",
-        categoria: "Endodoncia",
-        duracionMinutos: 90,
-        precio: 6500,
-        descripcion: "Tratamiento de conducto.",
-        estado: "Activo",
-    },
-];
-
 const formularioVacio: FormularioCita = {
     pacienteId: "",
     doctorId: "",
@@ -224,7 +127,7 @@ const formularioVacio: FormularioCita = {
     observaciones: "",
 };
 
-const estadosCita: EstadoCita[] = [
+const estadosCita: EstadoCitaSupabase[] = [
     "Programada",
     "Confirmada",
     "En espera",
@@ -266,7 +169,21 @@ function iniciales(nombre: string) {
     return `${partes[0][0]}${partes[1][0]}`.toUpperCase();
 }
 
-function colorEstado(estado: EstadoCita) {
+function normalizarTexto(valor: unknown) {
+    return String(valor || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/\s+/g, " ");
+}
+
+function horaCorta(hora: string) {
+    if (!hora) return "";
+    return hora.slice(0, 5);
+}
+
+function colorEstado(estado: EstadoCitaSupabase) {
     if (estado === "Confirmada") return "bg-blue-50 text-blue-700";
     if (estado === "En espera") return "bg-amber-50 text-amber-700";
     if (estado === "En atención") return "bg-teal-50 text-teal-700";
@@ -279,7 +196,7 @@ function colorEstado(estado: EstadoCita) {
     return "bg-slate-100 text-slate-600";
 }
 
-function bordeEstado(estado: EstadoCita) {
+function bordeEstado(estado: EstadoCitaSupabase) {
     if (estado === "Confirmada") return "border-blue-200";
     if (estado === "En espera") return "border-amber-200";
     if (estado === "En atención") return "border-teal-200";
@@ -290,43 +207,6 @@ function bordeEstado(estado: EstadoCita) {
     return "border-slate-200";
 }
 
-function sumarDias(fechaBase: string, dias: number) {
-    const [year, month, day] = fechaBase.split("-").map(Number);
-    const fecha = new Date(year, month - 1, day);
-
-    fecha.setDate(fecha.getDate() + dias);
-
-    const nuevoYear = fecha.getFullYear();
-    const nuevoMonth = String(fecha.getMonth() + 1).padStart(2, "0");
-    const nuevoDay = String(fecha.getDate()).padStart(2, "0");
-
-    return `${nuevoYear}-${nuevoMonth}-${nuevoDay}`;
-}
-
-function sumarMesesManteniendoDia(fechaBase: string, meses: number) {
-    const [year, month, day] = fechaBase.split("-").map(Number);
-    const mesDestino = month - 1 + meses;
-    const primerDiaMesDestino = new Date(year, mesDestino, 1);
-    const ultimoDiaMesDestino = new Date(
-        primerDiaMesDestino.getFullYear(),
-        primerDiaMesDestino.getMonth() + 1,
-        0
-    ).getDate();
-
-    const diaSeguro = Math.min(day, ultimoDiaMesDestino);
-    const fecha = new Date(
-        primerDiaMesDestino.getFullYear(),
-        primerDiaMesDestino.getMonth(),
-        diaSeguro
-    );
-
-    const nuevoYear = fecha.getFullYear();
-    const nuevoMonth = String(fecha.getMonth() + 1).padStart(2, "0");
-    const nuevoDay = String(fecha.getDate()).padStart(2, "0");
-
-    return `${nuevoYear}-${nuevoMonth}-${nuevoDay}`;
-}
-
 function totalRepeticionesPorRecurrencia(recurrencia: string) {
     if (recurrencia === "Semanal") return 12;
     if (recurrencia === "Quincenal") return 12;
@@ -335,43 +215,108 @@ function totalRepeticionesPorRecurrencia(recurrencia: string) {
     return 1;
 }
 
-function fechaPorRecurrencia(fechaInicial: string, recurrencia: string, indice: number) {
-    if (recurrencia === "Semanal") return sumarDias(fechaInicial, indice * 7);
-    if (recurrencia === "Quincenal") return sumarDias(fechaInicial, indice * 15);
-    if (recurrencia === "Mensual") return sumarMesesManteniendoDia(fechaInicial, indice);
-
-    return fechaInicial;
-}
-
-function generarCitasRecurrentes(citaBase: Cita) {
-    const totalRepeticiones = totalRepeticionesPorRecurrencia(citaBase.recurrencia);
-
-    if (totalRepeticiones === 1) return [citaBase];
-
-    const serieId = `SERIE-${Date.now()}`;
-
-    return Array.from({ length: totalRepeticiones }, (_, indice) => ({
-        ...citaBase,
-        id: indice === 0 ? citaBase.id : `${citaBase.id}-${indice + 1}`,
-        fecha: fechaPorRecurrencia(citaBase.fecha, citaBase.recurrencia, indice),
-        serieId,
-        repeticion: indice + 1,
-        totalRepeticiones,
-    }));
-}
-
-function textoCitaRecurrente(cita: Cita) {
-    if (!cita.serieId || !cita.repeticion || !cita.totalRepeticiones) return "";
-
-    return `${cita.recurrencia} · ${cita.repeticion}/${cita.totalRepeticiones}`;
-}
-
 function textoRecurrenciaPlural(recurrencia: string) {
     if (recurrencia === "Semanal") return "semanales";
     if (recurrencia === "Quincenal") return "quincenales";
     if (recurrencia === "Mensual") return "mensuales";
 
     return "recurrentes";
+}
+
+function convertirPaciente(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "",
+        enfermedades:
+            paciente.enfermedades_sistemicas ||
+            paciente.antecedentes ||
+            "",
+        medicamentos: paciente.medicamentos_actuales || "",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
+}
+
+function convertirDoctor(doctor: DoctorSupabase): Doctor {
+    return {
+        id: doctor.id,
+        nombre: doctor.nombre || "",
+        especialidad: doctor.especialidad || "",
+        telefono: doctor.telefono || "",
+        correo: doctor.correo || "",
+        horario: doctor.observaciones || "",
+        estado: doctor.estado || "Activo",
+    };
+}
+
+function convertirServicio(servicio: ServicioSupabase): Servicio {
+    return {
+        id: servicio.id,
+        nombre: servicio.nombre || "",
+        categoria: servicio.categoria || "General",
+        duracionMinutos: Number(servicio.duracion_minutos || 30),
+        precio: Number(servicio.precio || 0),
+        descripcion: servicio.descripcion || "",
+        estado: servicio.estado || "Activo",
+    };
+}
+
+function convertirCita(cita: CitaSupabase): Cita {
+    return {
+        id: cita.id,
+        pacienteId: cita.paciente_id || "",
+        pacienteNombre: cita.paciente_nombre || "",
+        doctorId: cita.doctor_id || "",
+        doctorNombre: cita.doctor_nombre || "",
+        servicioId: cita.servicio_id || "",
+        servicioNombre: cita.servicio_nombre || "",
+        costo: Number(cita.costo || 0),
+        fecha: cita.fecha,
+        hora: horaCorta(cita.hora),
+        duracionMinutos: Number(cita.duracion_minutos || 30),
+        recurrencia: cita.recurrencia || "No repetir",
+        estado: cita.estado || "Programada",
+        observaciones: cita.observaciones || "",
+        creadaEn: cita.creado_en || "",
+        citaOrigenId: cita.cita_origen_id,
+    };
+}
+
+function agregarNumeracionRecurrente(citas: Cita[]) {
+    const grupos = new Map<string, Cita[]>();
+
+    citas.forEach((cita) => {
+        if (!cita.citaOrigenId && cita.recurrencia === "No repetir") return;
+
+        const clave = cita.citaOrigenId || cita.id;
+
+        if (!grupos.has(clave)) grupos.set(clave, []);
+        grupos.get(clave)?.push(cita);
+    });
+
+    grupos.forEach((grupo) => {
+        grupo.sort((a, b) => `${a.fecha} ${a.hora}`.localeCompare(`${b.fecha} ${b.hora}`));
+        grupo.forEach((cita, index) => {
+            cita.repeticion = index + 1;
+            cita.totalRepeticiones = grupo.length;
+        });
+    });
+
+    return citas;
+}
+
+function textoCitaRecurrente(cita: Cita) {
+    if (!cita.citaOrigenId && cita.recurrencia === "No repetir") return "";
+    if (!cita.repeticion || !cita.totalRepeticiones) return "";
+
+    return `${cita.recurrencia} · ${cita.repeticion}/${cita.totalRepeticiones}`;
 }
 
 export default function AgendaPage() {
@@ -394,98 +339,63 @@ export default function AgendaPage() {
     const [busqueda, setBusqueda] = useState("");
     const [busquedaPacienteCita, setBusquedaPacienteCita] = useState("");
     const [selectorPacienteAbierto, setSelectorPacienteAbierto] = useState(false);
-    const [estadoFiltro, setEstadoFiltro] = useState<EstadoCita | "Todos">(
+    const [estadoFiltro, setEstadoFiltro] = useState<EstadoCitaSupabase | "Todos">(
         "Todos"
     );
 
-    useEffect(() => {
-        setConfiguracion(obtenerConfiguracionClinica());
+    const [cargando, setCargando] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState("");
 
-        const pacientesGuardados = localStorage.getItem("pacientes_sistema_clinico");
-        const doctoresGuardados = localStorage.getItem("doctores_sistema_clinico");
-        const serviciosGuardados = localStorage.getItem("servicios_sistema_clinico");
-        const citasGuardadas = localStorage.getItem("citas_sistema_clinico");
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
 
-        if (pacientesGuardados) {
-            setPacientes(JSON.parse(pacientesGuardados) as Paciente[]);
-        } else {
-            setPacientes(pacientesIniciales);
-            localStorage.setItem(
-                "pacientes_sistema_clinico",
-                JSON.stringify(pacientesIniciales)
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const [
+                pacientesSupabase,
+                doctoresSupabase,
+                serviciosSupabase,
+                citasSupabase,
+            ] = await Promise.all([
+                listarPacientesSupabase(),
+                listarDoctoresSupabase(),
+                listarServiciosSupabase(),
+                listarCitasSupabase(),
+            ]);
+
+            const pacientesConvertidos = pacientesSupabase.map(convertirPaciente);
+            const doctoresConvertidos = doctoresSupabase.map(convertirDoctor);
+            const serviciosConvertidos = serviciosSupabase.map(convertirServicio);
+            const citasConvertidas = agregarNumeracionRecurrente(
+                citasSupabase.map(convertirCita)
             );
+
+            setPacientes(pacientesConvertidos);
+            setDoctores(doctoresConvertidos);
+            setServicios(serviciosConvertidos);
+            setCitas(citasConvertidas);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar la agenda desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
         }
-
-        if (doctoresGuardados) {
-            setDoctores(JSON.parse(doctoresGuardados) as Doctor[]);
-        } else {
-            setDoctores(doctoresIniciales);
-            localStorage.setItem(
-                "doctores_sistema_clinico",
-                JSON.stringify(doctoresIniciales)
-            );
-        }
-
-        if (serviciosGuardados) {
-            setServicios(JSON.parse(serviciosGuardados) as Servicio[]);
-        } else {
-            setServicios(serviciosIniciales);
-            localStorage.setItem(
-                "servicios_sistema_clinico",
-                JSON.stringify(serviciosIniciales)
-            );
-        }
-
-        if (citasGuardadas) {
-            setCitas(JSON.parse(citasGuardadas) as Cita[]);
-        } else {
-            const citasIniciales: Cita[] = [
-                {
-                    id: "1",
-                    pacienteId: "1",
-                    pacienteNombre: "María López",
-                    doctorId: "1",
-                    doctorNombre: "Dra. Ana Martínez",
-                    servicioId: "1",
-                    servicioNombre: "Limpieza dental",
-                    costo: 1200,
-                    fecha: fechaHoyLocal(),
-                    hora: "09:00",
-                    recurrencia: "No repetir",
-                    estado: "Confirmada",
-                    observaciones: "Primera cita del día.",
-                    creadaEn: fechaHoyLocal(),
-                },
-                {
-                    id: "2",
-                    pacienteId: "2",
-                    pacienteNombre: "Carlos Hernández",
-                    doctorId: "2",
-                    doctorNombre: "Dr. Luis Ramírez",
-                    servicioId: "2",
-                    servicioNombre: "Extracción dental",
-                    costo: 2500,
-                    fecha: fechaHoyLocal(),
-                    hora: "11:00",
-                    recurrencia: "No repetir",
-                    estado: "Programada",
-                    observaciones: "Controlar presión antes del procedimiento.",
-                    creadaEn: fechaHoyLocal(),
-                },
-            ];
-
-            setCitas(citasIniciales);
-            localStorage.setItem(
-                "citas_sistema_clinico",
-                JSON.stringify(citasIniciales)
-            );
-        }
-    }, []);
-
-    function guardarCitas(nuevaLista: Cita[]) {
-        setCitas(nuevaLista);
-        localStorage.setItem("citas_sistema_clinico", JSON.stringify(nuevaLista));
     }
+
+    useEffect(() => {
+        cargarDatos();
+    }, []);
 
     function actualizarCampo<K extends keyof FormularioCita>(
         campo: K,
@@ -526,7 +436,7 @@ export default function AgendaPage() {
         setSelectorPacienteAbierto(false);
     }
 
-    function guardarCita(event: FormEvent<HTMLFormElement>) {
+    async function guardarCita(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         const paciente = pacientes.find((item) => item.id === formulario.pacienteId);
@@ -563,67 +473,72 @@ export default function AgendaPage() {
             return;
         }
 
-        if (citaEditandoId) {
-            const nuevaLista = citas.map((cita) =>
-                cita.id === citaEditandoId
-                    ? {
-                        ...cita,
-                        pacienteId: paciente.id,
-                        pacienteNombre: paciente.nombre,
-                        doctorId: doctor.id,
-                        doctorNombre: doctor.nombre,
-                        servicioId: servicio.id,
-                        servicioNombre: servicio.nombre,
-                        costo: numero(formulario.costo),
-                        fecha: formulario.fecha,
-                        hora: formulario.hora,
-                        recurrencia: formulario.recurrencia,
-                        observaciones: formulario.observaciones.trim(),
-                        estado:
-                            cita.estado === "Cancelada" || cita.estado === "Cobrada"
-                                ? cita.estado
-                                : cita.estado,
-                    }
-                    : cita
-            );
+        setGuardando(true);
 
-            guardarCitas(nuevaLista);
+        try {
+            if (citaEditandoId) {
+                await actualizarCitaSupabase(citaEditandoId, {
+                    paciente_id: paciente.id,
+                    paciente_nombre: paciente.nombre,
+                    doctor_id: doctor.id,
+                    doctor_nombre: doctor.nombre,
+                    servicio_id: servicio.id,
+                    servicio_nombre: servicio.nombre,
+                    fecha: formulario.fecha,
+                    hora: formulario.hora,
+                    duracion_minutos: servicio.duracionMinutos,
+                    costo: numero(formulario.costo),
+                    recurrencia: formulario.recurrencia,
+                    observaciones: formulario.observaciones.trim(),
+                });
+
+                await cargarDatos();
+                limpiarFormulario();
+                alert("Cita actualizada correctamente.");
+                return;
+            }
+
+            const citasCreadas = await crearCitasSupabase({
+                paciente_id: paciente.id,
+                paciente_nombre: paciente.nombre,
+                doctor_id: doctor.id,
+                doctor_nombre: doctor.nombre,
+                servicio_id: servicio.id,
+                servicio_nombre: servicio.nombre,
+                fecha: formulario.fecha,
+                hora: formulario.hora,
+                duracion_minutos: servicio.duracionMinutos,
+                costo: numero(formulario.costo),
+                recurrencia: formulario.recurrencia,
+                cantidad_repeticiones: totalRepeticionesPorRecurrencia(
+                    formulario.recurrencia
+                ),
+                estado: "Programada",
+                observaciones: formulario.observaciones.trim(),
+            });
+
+            setFechaSeleccionada(formulario.fecha);
+            await cargarDatos();
             limpiarFormulario();
-            alert("Cita actualizada correctamente.");
-            return;
+
+            if (citasCreadas.length > 1) {
+                alert(
+                    `Cita recurrente registrada correctamente. Se generaron ${citasCreadas.length} citas ${textoRecurrenciaPlural(formulario.recurrencia)}.`
+                );
+                return;
+            }
+
+            alert("Cita registrada correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo guardar la cita.";
+
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
         }
-
-        const nuevaCita: Cita = {
-            id: `CITA-${Date.now()}`,
-            pacienteId: paciente.id,
-            pacienteNombre: paciente.nombre,
-            doctorId: doctor.id,
-            doctorNombre: doctor.nombre,
-            servicioId: servicio.id,
-            servicioNombre: servicio.nombre,
-            costo: numero(formulario.costo),
-            fecha: formulario.fecha,
-            hora: formulario.hora,
-            recurrencia: formulario.recurrencia,
-            estado: "Programada",
-            observaciones: formulario.observaciones.trim(),
-            creadaEn: fechaHoyLocal(),
-        };
-
-        const citasGeneradas = generarCitasRecurrentes(nuevaCita);
-
-        guardarCitas([...citasGeneradas, ...citas]);
-        setFechaSeleccionada(formulario.fecha);
-        limpiarFormulario();
-
-        if (citasGeneradas.length > 1) {
-            alert(
-                `Cita recurrente registrada correctamente. Se generaron ${citasGeneradas.length} citas ${textoRecurrenciaPlural(formulario.recurrencia)}.`
-            );
-            return;
-        }
-
-        alert("Cita registrada correctamente.");
     }
 
     function editarCita(cita: Cita) {
@@ -633,7 +548,7 @@ export default function AgendaPage() {
             doctorId: cita.doctorId,
             servicioId: cita.servicioId,
             fecha: cita.fecha,
-            hora: cita.hora,
+            hora: horaCorta(cita.hora),
             recurrencia: cita.recurrencia,
             costo: cita.costo.toString(),
             observaciones: cita.observaciones,
@@ -642,40 +557,42 @@ export default function AgendaPage() {
         setSelectorPacienteAbierto(false);
     }
 
-    function cambiarEstadoCita(citaId: string, estado: EstadoCita) {
-        const nuevaLista = citas.map((cita) =>
-            cita.id === citaId
-                ? {
-                    ...cita,
-                    estado,
-                }
-                : cita
-        );
+    async function cambiarEstadoCita(citaId: string, estado: EstadoCitaSupabase) {
+        try {
+            await cambiarEstadoCitaSupabase(citaId, estado);
+            await cargarDatos();
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cambiar el estado de la cita.";
 
-        guardarCitas(nuevaLista);
+            alert(mensaje);
+        }
     }
 
-    function eliminarCita(citaId: string) {
-        const confirmar = window.confirm("¿Seguro que deseas eliminar esta cita?");
+    async function eliminarCita(citaId: string) {
+        const confirmar = window.confirm(
+            "¿Seguro que deseas eliminar esta cita? Por seguridad se marcará como cancelada."
+        );
 
         if (!confirmar) return;
 
-        const nuevaLista = citas.filter((cita) => cita.id !== citaId);
-        guardarCitas(nuevaLista);
+        await cambiarEstadoCita(citaId, "Cancelada");
     }
 
     const citasDelDia = useMemo(() => {
-        const texto = busqueda.toLowerCase().trim();
+        const texto = normalizarTexto(busqueda);
 
         return citas
             .filter((cita) => cita.fecha === fechaSeleccionada)
             .filter((cita) => {
                 const coincideTexto =
                     !texto ||
-                    cita.pacienteNombre.toLowerCase().includes(texto) ||
-                    cita.doctorNombre.toLowerCase().includes(texto) ||
-                    cita.servicioNombre.toLowerCase().includes(texto) ||
-                    cita.estado.toLowerCase().includes(texto);
+                    normalizarTexto(cita.pacienteNombre).includes(texto) ||
+                    normalizarTexto(cita.doctorNombre).includes(texto) ||
+                    normalizarTexto(cita.servicioNombre).includes(texto) ||
+                    normalizarTexto(cita.estado).includes(texto);
 
                 const coincideEstado =
                     estadoFiltro === "Todos" || cita.estado === estadoFiltro;
@@ -710,16 +627,16 @@ export default function AgendaPage() {
         pacientes.find((paciente) => paciente.id === formulario.pacienteId) || null;
 
     const pacientesFiltradosFormulario = useMemo(() => {
-        const texto = busquedaPacienteCita.trim().toLowerCase();
+        const texto = normalizarTexto(busquedaPacienteCita);
 
         return pacientesActivos
             .filter((paciente) => {
                 if (!texto) return true;
 
                 return (
-                    paciente.nombre.toLowerCase().includes(texto) ||
-                    paciente.telefono.toLowerCase().includes(texto) ||
-                    paciente.cedula.toLowerCase().includes(texto)
+                    normalizarTexto(paciente.nombre).includes(texto) ||
+                    normalizarTexto(paciente.telefono).includes(texto) ||
+                    normalizarTexto(paciente.cedula).includes(texto)
                 );
             })
             .slice(0, 8);
@@ -736,6 +653,43 @@ export default function AgendaPage() {
             descripcion="Programación de citas, control de estados, atención clínica y envío a caja"
             moduloActivo="Agenda Médica"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar la agenda
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Agenda conectada a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Pacientes, doctores, servicios y citas ya se leen desde la base de datos.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando || guardando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    Recargar
+                </button>
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
                     <div className="flex items-start justify-between">
@@ -880,8 +834,8 @@ export default function AgendaPage() {
                                                 type="button"
                                                 onClick={() => seleccionarPacienteCita(paciente)}
                                                 className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left hover:bg-teal-50 ${formulario.pacienteId === paciente.id
-                                                        ? "bg-teal-50"
-                                                        : "bg-white"
+                                                    ? "bg-teal-50"
+                                                    : "bg-white"
                                                     }`}
                                             >
                                                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 text-[11px] font-black text-white">
@@ -1033,13 +987,26 @@ export default function AgendaPage() {
                                 onChange={(event) =>
                                     actualizarCampo("recurrencia", event.target.value)
                                 }
-                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                disabled={Boolean(citaEditandoId)}
+                                className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                             >
                                 <option>No repetir</option>
                                 <option>Semanal</option>
                                 <option>Quincenal</option>
                                 <option>Mensual</option>
                             </select>
+
+                            {formulario.recurrencia !== "No repetir" && !citaEditandoId && (
+                                <p className="mt-2 rounded-2xl bg-purple-50 px-4 py-3 text-xs font-bold text-purple-700">
+                                    Se crearán 12 citas {textoRecurrenciaPlural(formulario.recurrencia)}.
+                                </p>
+                            )}
+
+                            {citaEditandoId && (
+                                <p className="mt-2 rounded-2xl bg-amber-50 px-4 py-3 text-xs font-bold text-amber-700">
+                                    Al editar una cita, solo se modifica esta cita individual.
+                                </p>
+                            )}
                         </div>
 
                         <div className="mt-4">
@@ -1058,15 +1025,23 @@ export default function AgendaPage() {
                         </div>
 
                         <div className="mt-5 flex flex-wrap gap-2">
-                            <button className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90">
+                            <button
+                                disabled={guardando}
+                                className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
                                 <CalendarCheck className="h-4 w-4" />
-                                {citaEditandoId ? "Guardar cambios" : "Registrar cita"}
+                                {guardando
+                                    ? "Guardando..."
+                                    : citaEditandoId
+                                        ? "Guardar cambios"
+                                        : "Registrar cita"}
                             </button>
 
                             <button
                                 type="button"
                                 onClick={limpiarFormulario}
-                                className="rounded-xl bg-white px-5 py-3 text-[12px] font-bold text-slate-600 shadow-sm hover:bg-slate-50"
+                                disabled={guardando}
+                                className="rounded-xl bg-white px-5 py-3 text-[12px] font-bold text-slate-600 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 Limpiar
                             </button>
@@ -1097,7 +1072,7 @@ export default function AgendaPage() {
                                 <select
                                     value={estadoFiltro}
                                     onChange={(event) =>
-                                        setEstadoFiltro(event.target.value as EstadoCita | "Todos")
+                                        setEstadoFiltro(event.target.value as EstadoCitaSupabase | "Todos")
                                     }
                                     className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                 >
@@ -1122,166 +1097,176 @@ export default function AgendaPage() {
 
                     <div className="max-h-[780px] overflow-y-auto p-4">
                         <div className="space-y-3">
-                            {citasDelDia.map((cita) => (
-                                <div
-                                    key={cita.id}
-                                    className={`rounded-3xl border bg-white p-4 shadow-sm ${bordeEstado(
-                                        cita.estado
-                                    )}`}
-                                >
-                                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                                        <div className="flex gap-3">
-                                            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-600 to-cyan-600 text-sm font-black text-white">
-                                                {iniciales(cita.pacienteNombre)}
-                                            </div>
-
-                                            <div>
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    <h4 className="text-sm font-black text-slate-800">
-                                                        {cita.pacienteNombre}
-                                                    </h4>
-
-                                                    <span
-                                                        className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${colorEstado(
-                                                            cita.estado
-                                                        )}`}
-                                                    >
-                                                        {cita.estado}
-                                                    </span>
-
-                                                    {textoCitaRecurrente(cita) && (
-                                                        <span className="rounded-full bg-purple-50 px-2.5 py-1 text-[10px] font-bold text-purple-700">
-                                                            {textoCitaRecurrente(cita)}
-                                                        </span>
-                                                    )}
-                                                </div>
-
-                                                <div className="mt-2 grid gap-1 text-[12px] text-slate-500">
-                                                    <p className="flex items-center gap-2">
-                                                        <Clock className="h-3.5 w-3.5 text-slate-400" />
-                                                        {cita.hora}
-                                                    </p>
-
-                                                    <p className="flex items-center gap-2">
-                                                        <Stethoscope className="h-3.5 w-3.5 text-slate-400" />
-                                                        {cita.servicioNombre}
-                                                    </p>
-
-                                                    <p className="flex items-center gap-2">
-                                                        <UserRound className="h-3.5 w-3.5 text-slate-400" />
-                                                        {cita.doctorNombre}
-                                                    </p>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        <div className="text-left md:text-right">
-                                            <p className="text-xs font-bold text-slate-400">Costo</p>
-                                            <p className="mt-1 text-sm font-black text-slate-800">
-                                                {formatoMoneda(cita.costo, configuracion.simboloMoneda)}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    {cita.observaciones && (
-                                        <div className="mt-4 rounded-2xl bg-slate-50 p-4">
-                                            <p className="text-xs leading-5 text-slate-500">
-                                                {cita.observaciones}
-                                            </p>
-                                        </div>
-                                    )}
-
-                                    <div className="mt-4 flex flex-wrap gap-2">
-                                        {cita.estado === "Programada" && (
-                                            <button
-                                                onClick={() => cambiarEstadoCita(cita.id, "Confirmada")}
-                                                className="flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700 hover:bg-blue-100"
-                                            >
-                                                <CheckCircle2 className="h-3.5 w-3.5" />
-                                                Confirmar
-                                            </button>
-                                        )}
-
-                                        {(cita.estado === "Programada" ||
-                                            cita.estado === "Confirmada") && (
-                                                <button
-                                                    onClick={() => cambiarEstadoCita(cita.id, "En espera")}
-                                                    className="flex items-center gap-1.5 rounded-xl bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
-                                                >
-                                                    <CalendarClock className="h-3.5 w-3.5" />
-                                                    En espera
-                                                </button>
-                                            )}
-
-                                        {(cita.estado === "En espera" ||
-                                            cita.estado === "Confirmada") && (
-                                                <button
-                                                    onClick={() =>
-                                                        cambiarEstadoCita(cita.id, "En atención")
-                                                    }
-                                                    className="flex items-center gap-1.5 rounded-xl bg-teal-50 px-3 py-2 text-[11px] font-bold text-teal-700 hover:bg-teal-100"
-                                                >
-                                                    <Activity className="h-3.5 w-3.5" />
-                                                    En atención
-                                                </button>
-                                            )}
-
-                                        {cita.estado !== "Atendida" &&
-                                            cita.estado !== "Cobrada" &&
-                                            cita.estado !== "Cancelada" &&
-                                            cita.estado !== "No asistió" && (
-                                                <button
-                                                    onClick={() => cambiarEstadoCita(cita.id, "Atendida")}
-                                                    className="flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100"
-                                                >
-                                                    <CalendarCheck className="h-3.5 w-3.5" />
-                                                    Atendida
-                                                </button>
-                                            )}
-
-                                        {cita.estado === "Atendida" && (
-                                            <Link
-                                                href="/caja"
-                                                className="flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
-                                            >
-                                                <CreditCard className="h-3.5 w-3.5" />
-                                                Cobrar
-                                            </Link>
-                                        )}
-
-                                        <button
-                                            onClick={() => editarCita(cita)}
-                                            className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-[11px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
-                                        >
-                                            <Edit3 className="h-3.5 w-3.5" />
-                                            Editar
-                                        </button>
-
-                                        {cita.estado !== "Cancelada" &&
-                                            cita.estado !== "Cobrada" && (
-                                                <button
-                                                    onClick={() =>
-                                                        cambiarEstadoCita(cita.id, "Cancelada")
-                                                    }
-                                                    className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100"
-                                                >
-                                                    <XCircle className="h-3.5 w-3.5" />
-                                                    Cancelar
-                                                </button>
-                                            )}
-
-                                        <button
-                                            onClick={() => eliminarCita(cita.id)}
-                                            className="flex items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-2 text-[11px] font-bold text-slate-500 hover:bg-slate-200"
-                                        >
-                                            <Trash2 className="h-3.5 w-3.5" />
-                                            Eliminar
-                                        </button>
-                                    </div>
+                            {cargando && (
+                                <div className="rounded-3xl border border-teal-100 bg-teal-50 p-8 text-center">
+                                    <Activity className="mx-auto h-8 w-8 animate-pulse text-teal-700" />
+                                    <p className="mt-3 text-xs font-bold text-teal-700">
+                                        Cargando agenda desde Supabase...
+                                    </p>
                                 </div>
-                            ))}
+                            )}
 
-                            {citasDelDia.length === 0 && (
+                            {!cargando &&
+                                citasDelDia.map((cita) => (
+                                    <div
+                                        key={cita.id}
+                                        className={`rounded-3xl border bg-white p-4 shadow-sm ${bordeEstado(
+                                            cita.estado
+                                        )}`}
+                                    >
+                                        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                                            <div className="flex gap-3">
+                                                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-600 to-cyan-600 text-sm font-black text-white">
+                                                    {iniciales(cita.pacienteNombre)}
+                                                </div>
+
+                                                <div>
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <h4 className="text-sm font-black text-slate-800">
+                                                            {cita.pacienteNombre}
+                                                        </h4>
+
+                                                        <span
+                                                            className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${colorEstado(
+                                                                cita.estado
+                                                            )}`}
+                                                        >
+                                                            {cita.estado}
+                                                        </span>
+
+                                                        {textoCitaRecurrente(cita) && (
+                                                            <span className="rounded-full bg-purple-50 px-2.5 py-1 text-[10px] font-bold text-purple-700">
+                                                                {textoCitaRecurrente(cita)}
+                                                            </span>
+                                                        )}
+                                                    </div>
+
+                                                    <div className="mt-2 grid gap-1 text-[12px] text-slate-500">
+                                                        <p className="flex items-center gap-2">
+                                                            <Clock className="h-3.5 w-3.5 text-slate-400" />
+                                                            {horaCorta(cita.hora)}
+                                                        </p>
+
+                                                        <p className="flex items-center gap-2">
+                                                            <Stethoscope className="h-3.5 w-3.5 text-slate-400" />
+                                                            {cita.servicioNombre}
+                                                        </p>
+
+                                                        <p className="flex items-center gap-2">
+                                                            <UserRound className="h-3.5 w-3.5 text-slate-400" />
+                                                            {cita.doctorNombre}
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="text-left md:text-right">
+                                                <p className="text-xs font-bold text-slate-400">Costo</p>
+                                                <p className="mt-1 text-sm font-black text-slate-800">
+                                                    {formatoMoneda(cita.costo, configuracion.simboloMoneda)}
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {cita.observaciones && (
+                                            <div className="mt-4 rounded-2xl bg-slate-50 p-4">
+                                                <p className="text-xs leading-5 text-slate-500">
+                                                    {cita.observaciones}
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        <div className="mt-4 flex flex-wrap gap-2">
+                                            {cita.estado === "Programada" && (
+                                                <button
+                                                    onClick={() => cambiarEstadoCita(cita.id, "Confirmada")}
+                                                    className="flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700 hover:bg-blue-100"
+                                                >
+                                                    <CheckCircle2 className="h-3.5 w-3.5" />
+                                                    Confirmar
+                                                </button>
+                                            )}
+
+                                            {(cita.estado === "Programada" ||
+                                                cita.estado === "Confirmada") && (
+                                                    <button
+                                                        onClick={() => cambiarEstadoCita(cita.id, "En espera")}
+                                                        className="flex items-center gap-1.5 rounded-xl bg-amber-50 px-3 py-2 text-[11px] font-bold text-amber-700 hover:bg-amber-100"
+                                                    >
+                                                        <CalendarClock className="h-3.5 w-3.5" />
+                                                        En espera
+                                                    </button>
+                                                )}
+
+                                            {(cita.estado === "En espera" ||
+                                                cita.estado === "Confirmada") && (
+                                                    <button
+                                                        onClick={() =>
+                                                            cambiarEstadoCita(cita.id, "En atención")
+                                                        }
+                                                        className="flex items-center gap-1.5 rounded-xl bg-teal-50 px-3 py-2 text-[11px] font-bold text-teal-700 hover:bg-teal-100"
+                                                    >
+                                                        <Activity className="h-3.5 w-3.5" />
+                                                        En atención
+                                                    </button>
+                                                )}
+
+                                            {cita.estado !== "Atendida" &&
+                                                cita.estado !== "Cobrada" &&
+                                                cita.estado !== "Cancelada" &&
+                                                cita.estado !== "No asistió" && (
+                                                    <button
+                                                        onClick={() => cambiarEstadoCita(cita.id, "Atendida")}
+                                                        className="flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-700 hover:bg-indigo-100"
+                                                    >
+                                                        <CalendarCheck className="h-3.5 w-3.5" />
+                                                        Atendida
+                                                    </button>
+                                                )}
+
+                                            {cita.estado === "Atendida" && (
+                                                <Link
+                                                    href="/caja"
+                                                    className="flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
+                                                >
+                                                    <CreditCard className="h-3.5 w-3.5" />
+                                                    Cobrar
+                                                </Link>
+                                            )}
+
+                                            <button
+                                                onClick={() => editarCita(cita)}
+                                                className="flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-[11px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                                            >
+                                                <Edit3 className="h-3.5 w-3.5" />
+                                                Editar
+                                            </button>
+
+                                            {cita.estado !== "Cancelada" &&
+                                                cita.estado !== "Cobrada" && (
+                                                    <button
+                                                        onClick={() =>
+                                                            cambiarEstadoCita(cita.id, "Cancelada")
+                                                        }
+                                                        className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100"
+                                                    >
+                                                        <XCircle className="h-3.5 w-3.5" />
+                                                        Cancelar
+                                                    </button>
+                                                )}
+
+                                            <button
+                                                onClick={() => eliminarCita(cita.id)}
+                                                className="flex items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-2 text-[11px] font-bold text-slate-500 hover:bg-slate-200"
+                                            >
+                                                <Trash2 className="h-3.5 w-3.5" />
+                                                Eliminar
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+
+                            {!cargando && citasDelDia.length === 0 && (
                                 <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
                                     <Calendar className="mx-auto h-10 w-10 text-slate-300" />
                                     <h4 className="mt-3 text-sm font-black text-slate-700">

@@ -19,7 +19,6 @@ import {
     Search,
     ShieldAlert,
     ShieldCheck,
-    Trash2,
     UserCog,
     WalletCards,
 } from "lucide-react";
@@ -29,195 +28,17 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    listarEventosAuditoriaSupabase,
+    type EventoAuditoriaSupabase,
+    type ModuloAuditoriaSupabase,
+    type NivelAuditoriaSupabase,
+} from "@/lib/supabase/auditoria";
 
-type NivelAuditoria = "Info" | "Éxito" | "Advertencia" | "Crítico";
-
-type ModuloAuditoria =
-    | "Agenda"
-    | "Pacientes"
-    | "Caja"
-    | "Gastos"
-    | "Inventario"
-    | "Proveedores"
-    | "Cierre de Caja"
-    | "Administración"
-    | "Respaldo"
-    | "Cuentas por Cobrar"
-    | "Cuentas por Pagar"
-    | "Sistema";
-
-type EventoAuditoria = {
-    id: string;
-    fecha: string;
-    hora: string;
-    modulo: ModuloAuditoria;
-    accion: string;
-    detalle: string;
-    usuarioNombre: string;
-    nivel: NivelAuditoria;
-    referencia: string;
-    monto: number;
-};
-
-type UsuarioApp = {
-    id: string;
-    usuario: string;
-    password: string;
-    nombre: string;
-    rol: string;
-    estado: "Activo" | "Inactivo";
-    creadoEn: string;
-};
-
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
-
-type Venta = {
-    id: string;
-    fecha: string;
-    hora: string;
-    tipoCobro: string;
-    clienteNombre: string;
-    concepto: string;
-    total: number;
-    efectivo: number;
-    tarjeta: number;
-    transferencia: number;
-    credito: number;
-    estado: EstadoVenta;
-    usuarioNombre: string;
-    observaciones: string;
-};
-
-type EstadoGasto = "Activo" | "Anulado";
-
-type Gasto = {
-    id: string;
-    fecha: string;
-    hora: string;
-    categoria: string;
-    descripcion: string;
-    monto: number;
-    metodoPago: string;
-    proveedor: string;
-    usuarioNombre: string;
-    observaciones: string;
-    estado: EstadoGasto;
-};
-
-type TipoMovimiento =
-    | "Entrada"
-    | "Salida"
-    | "Uso clínico"
-    | "Pérdida"
-    | "Ajuste";
-
-type MovimientoInventario = {
-    id: string;
-    fecha: string;
-    hora: string;
-    productoId: string;
-    productoNombre: string;
-    tipo: TipoMovimiento;
-    cantidad: number;
-    stockAnterior: number;
-    stockNuevo: number;
-    costoUnitario: number;
-    motivo: string;
-    usuarioNombre: string;
-};
-
-type EstadoCompra = "Activa" | "Anulada";
-
-type CompraProveedor = {
-    id: string;
-    fecha: string;
-    hora: string;
-    proveedorNombre: string;
-    productoNombre: string;
-    cantidad: number;
-    costoUnitario: number;
-    total: number;
-    pagoAhora: number;
-    credito: number;
-    metodoPago: string;
-    estado: EstadoCompra;
-    usuarioNombre: string;
-    observaciones: string;
-};
-
-type CierreCaja = {
-    id: string;
-    fecha: string;
-    hora: string;
-    usuarioNombre: string;
-    ventasCantidad: number;
-    ventasBrutas: number;
-    gastosTotal: number;
-    diferenciaEfectivo: number;
-    diferenciaTarjeta: number;
-    diferenciaTransferencia: number;
-    estado: "Cuadrado" | "Con diferencia";
-    observaciones: string;
-};
-
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cobrada"
-    | "Reagendada"
-    | "Cancelada"
-    | "No asistió";
-
-type Cita = {
-    id: string;
-    pacienteNombre: string;
-    doctorNombre: string;
-    servicioNombre: string;
-    costo: number;
-    fecha: string;
-    hora: string;
-    estado: EstadoCita;
-    observaciones: string;
-    creadaEn: string;
-};
-
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
-
-type CuentaPorCobrar = {
-    id: string;
-    ventaId: string;
-    pacienteNombre: string;
-    concepto: string;
-    total: number;
-    saldo: number;
-    fecha: string;
-    fechaVencimiento: string;
-    estado: EstadoCuenta;
-    abonos: unknown[];
-};
-
-type EstadoCuentaPagar =
-    | "Pendiente"
-    | "Parcial"
-    | "Pagada"
-    | "Vencida"
-    | "Anulada";
-
-type CuentaPorPagar = {
-    id: string;
-    compraId: string;
-    proveedorNombre: string;
-    concepto: string;
-    total: number;
-    saldo: number;
-    fecha: string;
-    fechaVencimiento: string;
-    estado: EstadoCuentaPagar;
-    abonos: unknown[];
-};
+type NivelAuditoria = NivelAuditoriaSupabase;
+type ModuloAuditoria = ModuloAuditoriaSupabase;
+type EventoAuditoria = EventoAuditoriaSupabase;
 
 const modulosAuditoria: (ModuloAuditoria | "Todos")[] = [
     "Todos",
@@ -233,6 +54,10 @@ const modulosAuditoria: (ModuloAuditoria | "Todos")[] = [
     "Cuentas por Cobrar",
     "Cuentas por Pagar",
     "Sistema",
+    "Documentos",
+    "Odontograma",
+    "Presupuestos",
+    "Órdenes de estudio",
 ];
 
 const nivelesAuditoria: (NivelAuditoria | "Todos")[] = [
@@ -256,25 +81,18 @@ function mesActualLocal() {
     return fechaHoyLocal().slice(0, 7);
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
 function formatoMoneda(valor: number, simbolo = "C$") {
     return `${simbolo} ${(valor || 0).toLocaleString("es-NI", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     })}`;
+}
+
+function normalizar(valor: unknown) {
+    return String(valor || "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
 }
 
 function colorNivel(nivel: NivelAuditoria) {
@@ -298,18 +116,12 @@ function iconoModulo(modulo: ModuloAuditoria) {
     if (modulo === "Respaldo") return Archive;
     if (modulo === "Cuentas por Cobrar") return BadgeDollarSign;
     if (modulo === "Cuentas por Pagar") return WalletCards;
+    if (modulo === "Documentos") return ClipboardList;
+    if (modulo === "Odontograma") return ShieldCheck;
+    if (modulo === "Presupuestos") return ClipboardList;
+    if (modulo === "Órdenes de estudio") return ClipboardList;
 
     return Database;
-}
-
-function estadoVisualCuenta(fechaVencimiento: string, estado: string) {
-    if (estado === "Pagada" || estado === "Anulada") return estado;
-
-    if (fechaVencimiento && fechaVencimiento < fechaHoyLocal()) {
-        return "Vencida";
-    }
-
-    return estado;
 }
 
 function descargarCSV(nombreArchivo: string, eventos: EventoAuditoria[]) {
@@ -323,6 +135,7 @@ function descargarCSV(nombreArchivo: string, eventos: EventoAuditoria[]) {
         "Usuario",
         "Referencia",
         "Monto",
+        "Origen",
     ];
 
     const filas = eventos.map((evento) => [
@@ -335,6 +148,7 @@ function descargarCSV(nombreArchivo: string, eventos: EventoAuditoria[]) {
         evento.usuarioNombre,
         evento.referencia,
         evento.monto.toString(),
+        evento.origen,
     ]);
 
     const contenido = [encabezados, ...filas]
@@ -363,6 +177,7 @@ export default function AuditoriaPage() {
     );
 
     const [eventos, setEventos] = useState<EventoAuditoria[]>([]);
+    const [erroresLectura, setErroresLectura] = useState<string[]>([]);
     const [busqueda, setBusqueda] = useState("");
     const [mesSeleccionado, setMesSeleccionado] = useState(mesActualLocal());
     const [filtroModulo, setFiltroModulo] = useState<ModuloAuditoria | "Todos">(
@@ -371,309 +186,53 @@ export default function AuditoriaPage() {
     const [filtroNivel, setFiltroNivel] = useState<NivelAuditoria | "Todos">(
         "Todos"
     );
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
 
-    function generarEventos() {
-        const nuevaConfiguracion = obtenerConfiguracionClinica();
+    async function cargarEventos() {
+        setCargando(true);
+        setError("");
 
-        const ventas = leerLocalStorage<Venta[]>("ventas_sistema_clinico", []);
-        const gastos = leerLocalStorage<Gasto[]>("gastos_sistema_clinico", []);
-        const movimientos = leerLocalStorage<MovimientoInventario[]>(
-            "movimientos_inventario_sistema_clinico",
-            []
-        );
-        const compras = leerLocalStorage<CompraProveedor[]>(
-            "compras_proveedores_sistema_clinico",
-            []
-        );
-        const cierres = leerLocalStorage<CierreCaja[]>(
-            "cierres_caja_sistema_clinico",
-            []
-        );
-        const citas = leerLocalStorage<Cita[]>("citas_sistema_clinico", []);
-        const usuarios = leerLocalStorage<UsuarioApp[]>(
-            "usuarios_app_sistema_clinico",
-            []
-        );
-        const cuentasCobrar = leerLocalStorage<CuentaPorCobrar[]>(
-            "cuentas_cobrar_sistema_clinico",
-            []
-        );
-        const cuentasPagar = leerLocalStorage<CuentaPorPagar[]>(
-            "cuentas_pagar_sistema_clinico",
-            []
-        );
-        const ultimoRespaldo = localStorage.getItem("ultimo_respaldo_sistema_clinico");
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
-        const nuevosEventos: EventoAuditoria[] = [];
+            const resultado = await listarEventosAuditoriaSupabase();
 
-        ventas.forEach((venta) => {
-            nuevosEventos.push({
-                id: `AUD-VENTA-${venta.id}`,
-                fecha: venta.fecha || fechaHoyLocal(),
-                hora: venta.hora || "00:00",
-                modulo: "Caja",
-                accion:
-                    venta.estado === "Anulada"
-                        ? "Venta anulada"
-                        : venta.credito > 0
-                            ? "Venta con crédito"
-                            : "Venta registrada",
-                detalle: `${venta.clienteNombre} · ${venta.concepto}`,
-                usuarioNombre: venta.usuarioNombre || "Usuario no identificado",
-                nivel:
-                    venta.estado === "Anulada"
-                        ? "Crítico"
-                        : venta.credito > 0
-                            ? "Advertencia"
-                            : "Éxito",
-                referencia: venta.id,
-                monto: venta.total || 0,
-            });
-        });
+            setEventos(resultado.eventos);
+            setErroresLectura(resultado.errores);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar la auditoría desde Supabase.";
 
-        gastos.forEach((gasto) => {
-            nuevosEventos.push({
-                id: `AUD-GASTO-${gasto.id}`,
-                fecha: gasto.fecha || fechaHoyLocal(),
-                hora: gasto.hora || "00:00",
-                modulo: "Gastos",
-                accion: gasto.estado === "Anulado" ? "Gasto anulado" : "Gasto registrado",
-                detalle: `${gasto.categoria} · ${gasto.descripcion}`,
-                usuarioNombre: gasto.usuarioNombre || "Usuario no identificado",
-                nivel: gasto.estado === "Anulado" ? "Crítico" : "Info",
-                referencia: gasto.id,
-                monto: gasto.monto || 0,
-            });
-        });
-
-        movimientos.forEach((movimiento) => {
-            nuevosEventos.push({
-                id: `AUD-MOV-${movimiento.id}`,
-                fecha: movimiento.fecha || fechaHoyLocal(),
-                hora: movimiento.hora || "00:00",
-                modulo: "Inventario",
-                accion: `Movimiento de inventario: ${movimiento.tipo}`,
-                detalle: `${movimiento.productoNombre} · Stock ${movimiento.stockAnterior} → ${movimiento.stockNuevo}. ${movimiento.motivo}`,
-                usuarioNombre: movimiento.usuarioNombre || "Usuario no identificado",
-                nivel:
-                    movimiento.tipo === "Pérdida"
-                        ? "Crítico"
-                        : movimiento.tipo === "Ajuste"
-                            ? "Advertencia"
-                            : "Info",
-                referencia: movimiento.id,
-                monto: (movimiento.cantidad || 0) * (movimiento.costoUnitario || 0),
-            });
-        });
-
-        compras.forEach((compra) => {
-            nuevosEventos.push({
-                id: `AUD-COMPRA-${compra.id}`,
-                fecha: compra.fecha || fechaHoyLocal(),
-                hora: compra.hora || "00:00",
-                modulo: "Proveedores",
-                accion:
-                    compra.estado === "Anulada"
-                        ? "Compra anulada"
-                        : compra.credito > 0
-                            ? "Compra a crédito"
-                            : "Compra registrada",
-                detalle: `${compra.proveedorNombre} · ${compra.productoNombre} · Cantidad ${compra.cantidad}`,
-                usuarioNombre: compra.usuarioNombre || "Usuario no identificado",
-                nivel:
-                    compra.estado === "Anulada"
-                        ? "Crítico"
-                        : compra.credito > 0
-                            ? "Advertencia"
-                            : "Éxito",
-                referencia: compra.id,
-                monto: compra.total || 0,
-            });
-        });
-
-        cierres.forEach((cierre) => {
-            const diferencia =
-                (cierre.diferenciaEfectivo || 0) +
-                (cierre.diferenciaTarjeta || 0) +
-                (cierre.diferenciaTransferencia || 0);
-
-            nuevosEventos.push({
-                id: `AUD-CIERRE-${cierre.id}`,
-                fecha: cierre.fecha || fechaHoyLocal(),
-                hora: cierre.hora || "00:00",
-                modulo: "Cierre de Caja",
-                accion:
-                    cierre.estado === "Cuadrado"
-                        ? "Cierre cuadrado"
-                        : "Cierre con diferencia",
-                detalle: `Ventas: ${cierre.ventasCantidad}. Bruto: ${formatoMoneda(
-                    cierre.ventasBrutas,
-                    nuevaConfiguracion.simboloMoneda
-                )}. Gastos: ${formatoMoneda(
-                    cierre.gastosTotal,
-                    nuevaConfiguracion.simboloMoneda
-                )}. Diferencia: ${formatoMoneda(
-                    diferencia,
-                    nuevaConfiguracion.simboloMoneda
-                )}`,
-                usuarioNombre: cierre.usuarioNombre || "Usuario no identificado",
-                nivel: cierre.estado === "Cuadrado" ? "Éxito" : "Advertencia",
-                referencia: cierre.id,
-                monto: diferencia,
-            });
-        });
-
-        citas.forEach((cita) => {
-            nuevosEventos.push({
-                id: `AUD-CITA-${cita.id}`,
-                fecha: cita.fecha || cita.creadaEn || fechaHoyLocal(),
-                hora: cita.hora || "00:00",
-                modulo: "Agenda",
-                accion:
-                    cita.estado === "Cancelada" || cita.estado === "No asistió"
-                        ? `Cita ${cita.estado.toLowerCase()}`
-                        : `Cita en estado ${cita.estado}`,
-                detalle: `${cita.pacienteNombre} · ${cita.servicioNombre} · ${cita.doctorNombre}`,
-                usuarioNombre: "Sistema",
-                nivel:
-                    cita.estado === "Cancelada" || cita.estado === "No asistió"
-                        ? "Advertencia"
-                        : cita.estado === "Cobrada" || cita.estado === "Atendida"
-                            ? "Éxito"
-                            : "Info",
-                referencia: cita.id,
-                monto: cita.costo || 0,
-            });
-        });
-
-        usuarios.forEach((usuario) => {
-            nuevosEventos.push({
-                id: `AUD-USUARIO-${usuario.id}`,
-                fecha: usuario.creadoEn || fechaHoyLocal(),
-                hora: "00:00",
-                modulo: "Administración",
-                accion:
-                    usuario.estado === "Activo"
-                        ? "Usuario activo registrado"
-                        : "Usuario inactivo registrado",
-                detalle: `${usuario.nombre} · Rol ${usuario.rol} · Acceso ${usuario.usuario}`,
-                usuarioNombre: "Administrador",
-                nivel: usuario.estado === "Activo" ? "Info" : "Advertencia",
-                referencia: usuario.id,
-                monto: 0,
-            });
-        });
-
-        cuentasCobrar.forEach((cuenta) => {
-            const estadoVisual = estadoVisualCuenta(
-                cuenta.fechaVencimiento,
-                cuenta.estado
-            );
-
-            nuevosEventos.push({
-                id: `AUD-CXC-${cuenta.id}`,
-                fecha: cuenta.fecha || fechaHoyLocal(),
-                hora: "00:00",
-                modulo: "Cuentas por Cobrar",
-                accion: `Cuenta por cobrar ${estadoVisual.toLowerCase()}`,
-                detalle: `${cuenta.pacienteNombre} · ${cuenta.concepto}`,
-                usuarioNombre: "Sistema",
-                nivel:
-                    estadoVisual === "Vencida"
-                        ? "Crítico"
-                        : estadoVisual === "Pagada"
-                            ? "Éxito"
-                            : "Advertencia",
-                referencia: cuenta.id,
-                monto: cuenta.saldo || 0,
-            });
-        });
-
-        cuentasPagar.forEach((cuenta) => {
-            const estadoVisual = estadoVisualCuenta(
-                cuenta.fechaVencimiento,
-                cuenta.estado
-            );
-
-            nuevosEventos.push({
-                id: `AUD-CXP-${cuenta.id}`,
-                fecha: cuenta.fecha || fechaHoyLocal(),
-                hora: "00:00",
-                modulo: "Cuentas por Pagar",
-                accion: `Cuenta por pagar ${estadoVisual.toLowerCase()}`,
-                detalle: `${cuenta.proveedorNombre} · ${cuenta.concepto}`,
-                usuarioNombre: "Sistema",
-                nivel:
-                    estadoVisual === "Vencida"
-                        ? "Crítico"
-                        : estadoVisual === "Pagada"
-                            ? "Éxito"
-                            : "Advertencia",
-                referencia: cuenta.id,
-                monto: cuenta.saldo || 0,
-            });
-        });
-
-        if (ultimoRespaldo) {
-            const fecha = new Date(ultimoRespaldo);
-
-            nuevosEventos.push({
-                id: "AUD-ULTIMO-RESPALDO",
-                fecha: Number.isNaN(fecha.getTime())
-                    ? fechaHoyLocal()
-                    : fecha.toISOString().slice(0, 10),
-                hora: Number.isNaN(fecha.getTime())
-                    ? "00:00"
-                    : fecha.toTimeString().slice(0, 5),
-                modulo: "Respaldo",
-                accion: "Respaldo generado o restaurado",
-                detalle: `Último respaldo registrado: ${ultimoRespaldo}`,
-                usuarioNombre: "Sistema",
-                nivel: "Éxito",
-                referencia: "ultimo_respaldo_sistema_clinico",
-                monto: 0,
-            });
+            setError(mensaje);
+            setEventos([]);
+            setErroresLectura([]);
+        } finally {
+            setCargando(false);
         }
-
-        nuevosEventos.push({
-            id: "AUD-CONFIGURACION",
-            fecha: fechaHoyLocal(),
-            hora: "00:00",
-            modulo: "Sistema",
-            accion: "Configuración activa",
-            detalle: `${nuevaConfiguracion.nombreClinica} · Moneda ${nuevaConfiguracion.simboloMoneda} · Comisión POS ${nuevaConfiguracion.comisionPOS}%`,
-            usuarioNombre: "Sistema",
-            nivel: "Info",
-            referencia: "configuracion_clinica_sistema_clinico",
-            monto: 0,
-        });
-
-        const ordenados = nuevosEventos.sort((a, b) =>
-            `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`)
-        );
-
-        setConfiguracion(nuevaConfiguracion);
-        setEventos(ordenados);
     }
 
     useEffect(() => {
-        generarEventos();
+        cargarEventos();
     }, []);
 
     const eventosFiltrados = useMemo(() => {
-        const texto = busqueda.toLowerCase().trim();
+        const texto = normalizar(busqueda.trim());
 
         return eventos
             .filter((evento) => evento.fecha.startsWith(mesSeleccionado))
             .filter((evento) => {
                 const coincideTexto =
                     !texto ||
-                    evento.modulo.toLowerCase().includes(texto) ||
-                    evento.accion.toLowerCase().includes(texto) ||
-                    evento.detalle.toLowerCase().includes(texto) ||
-                    evento.usuarioNombre.toLowerCase().includes(texto) ||
-                    evento.referencia.toLowerCase().includes(texto) ||
-                    evento.nivel.toLowerCase().includes(texto);
+                    normalizar(
+                        `${evento.modulo} ${evento.accion} ${evento.detalle} ${evento.usuarioNombre} ${evento.referencia} ${evento.nivel} ${evento.origen}`
+                    ).includes(texto);
 
                 const coincideModulo =
                     filtroModulo === "Todos" || evento.modulo === filtroModulo;
@@ -702,6 +261,10 @@ export default function AuditoriaPage() {
         0
     );
 
+    const eventosReales = eventosFiltrados.filter(
+        (evento) => evento.origen === "Real"
+    ).length;
+
     const resumenPorModulo = useMemo(() => {
         const mapa = new Map<ModuloAuditoria, number>();
 
@@ -721,9 +284,72 @@ export default function AuditoriaPage() {
     return (
         <AppShell
             titulo="Auditoría"
-            descripcion="Registro visual de eventos importantes derivados de los módulos del sistema"
+            descripcion="Registro de eventos importantes desde Supabase"
             moduloActivo="Auditoría"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar auditoría
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            {erroresLectura.length > 0 && (
+                <section className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-amber-800">
+                                Algunos módulos no devolvieron datos
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-amber-700">
+                                La auditoría siguió funcionando con los módulos disponibles.
+                            </p>
+
+                            <details className="mt-2">
+                                <summary className="cursor-pointer text-xs font-black text-amber-800">
+                                    Ver detalle técnico
+                                </summary>
+                                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-700">
+                                    {erroresLectura.slice(0, 8).map((item) => (
+                                        <li key={item}>{item}</li>
+                                    ))}
+                                </ul>
+                            </details>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Auditoría conectada a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Combina auditoría real guardada en la tabla auditoria y eventos derivados desde los módulos actuales.
+                    </p>
+                </div>
+
+                <button
+                    onClick={cargarEventos}
+                    disabled={cargando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar"}
+                </button>
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
                     <div className="flex items-start justify-between">
@@ -803,12 +429,10 @@ export default function AuditoriaPage() {
                     <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-blue-700" />
                     <div>
                         <h3 className="text-sm font-black text-blue-800">
-                            Auditoría automática derivada
+                            Auditoría Supabase
                         </h3>
                         <p className="mt-1 text-xs leading-5 text-blue-700">
-                            Este módulo construye eventos a partir de los datos actuales del
-                            sistema. Más adelante podemos agregar auditoría real para guardar
-                            cada acción en el momento exacto en que ocurre.
+                            Eventos reales encontrados: {eventosReales}. Los demás eventos son derivados de las tablas actuales para que el historial sea útil mientras vamos agregando registros directos en cada acción.
                         </p>
                     </div>
                 </div>
@@ -882,10 +506,11 @@ export default function AuditoriaPage() {
                             Acciones
                         </label>
                         <button
-                            onClick={generarEventos}
-                            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-[13px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                            onClick={cargarEventos}
+                            disabled={cargando}
+                            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-[13px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            <RefreshCcw className="h-4 w-4" />
+                            <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
                             Recargar
                         </button>
                     </div>
@@ -951,6 +576,15 @@ export default function AuditoriaPage() {
                                                     <span className="mono rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-400">
                                                         {evento.fecha} · {evento.hora}
                                                     </span>
+
+                                                    <span
+                                                        className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${evento.origen === "Real"
+                                                                ? "bg-emerald-50 text-emerald-700"
+                                                                : "bg-slate-50 text-slate-500"
+                                                            }`}
+                                                    >
+                                                        {evento.origen}
+                                                    </span>
                                                 </div>
 
                                                 <h4 className="mt-3 text-sm font-black text-slate-800">
@@ -1002,10 +636,14 @@ export default function AuditoriaPage() {
                                 <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
                                     <ClipboardList className="mx-auto h-10 w-10 text-slate-300" />
                                     <h4 className="mt-3 text-sm font-black text-slate-700">
-                                        No hay eventos para estos filtros
+                                        {cargando
+                                            ? "Cargando auditoría..."
+                                            : "No hay eventos para estos filtros"}
                                     </h4>
                                     <p className="mt-1 text-xs text-slate-400">
-                                        Probá cambiar el mes, módulo, nivel o búsqueda.
+                                        {cargando
+                                            ? "Consultando eventos desde Supabase."
+                                            : "Probá cambiar el mes, módulo, nivel o búsqueda."}
                                     </p>
                                 </div>
                             )}
@@ -1097,12 +735,10 @@ export default function AuditoriaPage() {
                             <LockKeyhole className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
                             <div>
                                 <h3 className="text-sm font-black text-amber-800">
-                                    Próxima mejora
+                                    Registro directo
                                 </h3>
                                 <p className="mt-1 text-xs leading-5 text-amber-700">
-                                    Cuando conectemos Supabase, la auditoría podrá guardar eventos
-                                    reales en base de datos: quién hizo cada acción, fecha exacta,
-                                    datos anteriores y datos nuevos.
+                                    Ya queda listo el helper registrarEventoAuditoriaSupabase para que, después, cada módulo pueda guardar eventos exactos al crear, editar, anular o eliminar.
                                 </p>
                             </div>
                         </div>

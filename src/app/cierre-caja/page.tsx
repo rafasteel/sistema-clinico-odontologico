@@ -5,15 +5,15 @@ import {
     AlertTriangle,
     Banknote,
     Calculator,
-    CalendarDays,
     CheckCircle2,
-    Clock,
     CreditCard,
     FileText,
     LockKeyhole,
     Printer,
     ReceiptText,
+    RefreshCcw,
     Search,
+    ShieldAlert,
     ShieldCheck,
     Trash2,
     Wallet,
@@ -24,6 +24,25 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    listarVentasSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    listarGastosSupabase,
+    type EstadoGastoSupabase,
+    type GastoSupabase,
+    type MetodoGastoSupabase,
+} from "@/lib/supabase/gastos";
+import {
+    anularCierreCajaSupabase,
+    crearCierreCajaSupabase,
+    listarCierresCajaSupabase,
+    type CierreCajaSupabase,
+    type EstadoCierreCajaSupabase,
+} from "@/lib/supabase/cierresCaja";
 
 type UsuarioSistema = {
     usuario: string;
@@ -31,15 +50,11 @@ type UsuarioSistema = {
     rol: string;
 };
 
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
-
 type Venta = {
     id: string;
     fecha: string;
     hora: string;
     tipoCobro: string;
-    citaId: string;
-    pacienteId: string;
     clienteNombre: string;
     concepto: string;
     total: number;
@@ -47,15 +62,12 @@ type Venta = {
     tarjeta: number;
     transferencia: number;
     credito: number;
-    estado: EstadoVenta;
-    usuarioNombre: string;
-    observaciones: string;
-    productoId?: string;
-    productoNombre?: string;
-    cantidadProducto?: number;
+    estado: EstadoVentaSupabase;
+    comisionTarjeta: number;
+    netoTarjeta: number;
 };
 
-type EstadoGasto = "Activo" | "Anulado";
+type EstadoGasto = EstadoGastoSupabase;
 
 type Gasto = {
     id: string;
@@ -64,7 +76,7 @@ type Gasto = {
     categoria: string;
     descripcion: string;
     monto: number;
-    metodoPago: string;
+    metodoPago: MetodoGastoSupabase;
     proveedor: string;
     usuarioNombre: string;
     observaciones: string;
@@ -90,12 +102,14 @@ type CierreCaja = {
     netoTarjeta: number;
     efectivoEsperado: number;
     efectivoContado: number;
+    tarjetaEsperada: number;
     tarjetaReportada: number;
+    transferenciaEsperada: number;
     transferenciaReportada: number;
     diferenciaEfectivo: number;
     diferenciaTarjeta: number;
     diferenciaTransferencia: number;
-    estado: "Cuadrado" | "Con diferencia";
+    estado: EstadoCierreCajaSupabase;
     observaciones: string;
 };
 
@@ -118,24 +132,17 @@ function fechaHoyLocal() {
     const year = fecha.getFullYear();
     const month = String(fecha.getMonth() + 1).padStart(2, "0");
     const day = String(fecha.getDate()).padStart(2, "0");
-
     return `${year}-${month}-${day}`;
 }
 
-function horaActualLocal() {
-    const fecha = new Date();
-    const hours = String(fecha.getHours()).padStart(2, "0");
-    const minutes = String(fecha.getMinutes()).padStart(2, "0");
-
-    return `${hours}:${minutes}`;
+function numero(valor: string | number | null | undefined) {
+    const convertido = Number(valor || 0);
+    if (Number.isNaN(convertido)) return 0;
+    return convertido;
 }
 
-function numero(valor: string) {
-    const convertido = Number(valor || 0);
-
-    if (Number.isNaN(convertido)) return 0;
-
-    return convertido;
+function horaCorta(valor: string) {
+    return String(valor || "").slice(0, 5);
 }
 
 function formatoMoneda(valor: number, simbolo = "C$") {
@@ -157,64 +164,140 @@ function textoDiferencia(valor: number, simbolo: string) {
     return `Falta ${formatoMoneda(Math.abs(valor), simbolo)}`;
 }
 
+function normalizarTexto(valor: unknown) {
+    return String(valor || "")
+        .toLowerCase()
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha,
+        hora: horaCorta(venta.hora),
+        tipoCobro: venta.tipo_cobro || "Venta",
+        clienteNombre: venta.cliente_nombre || "",
+        concepto: venta.concepto || "",
+        total: Number(venta.total || 0),
+        efectivo: Number(venta.efectivo || 0),
+        tarjeta: Number(venta.tarjeta || 0),
+        transferencia: Number(venta.transferencia || 0),
+        credito: Number(venta.credito || 0),
+        estado: venta.estado || "Pagada",
+        comisionTarjeta: Number(venta.comision_pos_monto || 0),
+        netoTarjeta: Number(venta.neto_tarjeta || 0),
+    };
+}
+
+function convertirGasto(gasto: GastoSupabase): Gasto {
+    return {
+        id: gasto.id,
+        fecha: gasto.fecha,
+        hora: horaCorta(gasto.hora),
+        categoria: gasto.categoria || "",
+        descripcion: gasto.descripcion || "",
+        monto: Number(gasto.monto || 0),
+        metodoPago: gasto.metodo_pago || "Efectivo",
+        proveedor: gasto.proveedor || "",
+        usuarioNombre: gasto.usuario_nombre || "",
+        observaciones: gasto.observaciones || "",
+        estado: gasto.estado || "Activo",
+    };
+}
+
+function convertirCierre(cierre: CierreCajaSupabase): CierreCaja {
+    return {
+        id: cierre.id,
+        fecha: cierre.fecha,
+        hora: horaCorta(cierre.hora),
+        usuarioNombre: cierre.usuario_nombre || "",
+        ventasCantidad: Number(cierre.ventas_cantidad || 0),
+        ventasBrutas: Number(cierre.ventas_brutas || 0),
+        efectivoSistema: Number(cierre.efectivo_sistema || 0),
+        tarjetaSistema: Number(cierre.tarjeta_sistema || 0),
+        transferenciaSistema: Number(cierre.transferencia_sistema || 0),
+        creditoGenerado: Number(cierre.credito_generado || 0),
+        gastosEfectivo: Number(cierre.gastos_efectivo || 0),
+        gastosTarjeta: Number(cierre.gastos_tarjeta || 0),
+        gastosTransferencia: Number(cierre.gastos_transferencia || 0),
+        gastosTotal: Number(cierre.gastos_total || 0),
+        comisionPOS: Number(cierre.comision_pos || 0),
+        netoTarjeta: Number(cierre.neto_tarjeta || 0),
+        efectivoEsperado: Number(cierre.efectivo_esperado || 0),
+        efectivoContado: Number(cierre.efectivo_contado || 0),
+        tarjetaEsperada: Number(cierre.tarjeta_esperada || 0),
+        tarjetaReportada: Number(cierre.tarjeta_reportada || 0),
+        transferenciaEsperada: Number(cierre.transferencia_esperada || 0),
+        transferenciaReportada: Number(cierre.transferencia_reportada || 0),
+        diferenciaEfectivo: Number(cierre.diferencia_efectivo || 0),
+        diferenciaTarjeta: Number(cierre.diferencia_tarjeta || 0),
+        diferenciaTransferencia: Number(cierre.diferencia_transferencia || 0),
+        estado: cierre.estado || "Cuadrado",
+        observaciones: cierre.observaciones || "",
+    };
+}
+
 export default function CierreCajaPage() {
     const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
         CONFIGURACION_PREDETERMINADA
     );
-
     const [ventas, setVentas] = useState<Venta[]>([]);
     const [gastos, setGastos] = useState<Gasto[]>([]);
     const [cierres, setCierres] = useState<CierreCaja[]>([]);
-
     const [fechaSeleccionada, setFechaSeleccionada] = useState(fechaHoyLocal());
-    const [formulario, setFormulario] =
-        useState<FormularioCierre>(formularioVacio);
+    const [formulario, setFormulario] = useState<FormularioCierre>(formularioVacio);
     const [busqueda, setBusqueda] = useState("");
+    const [cargando, setCargando] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+            if (usuarioGuardado) setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
+
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const [ventasSupabase, gastosSupabase, cierresSupabase] = await Promise.all([
+                listarVentasSupabase(),
+                listarGastosSupabase(fechaSeleccionada.slice(0, 7)),
+                listarCierresCajaSupabase(),
+            ]);
+
+            setVentas(ventasSupabase.map(convertirVenta));
+            setGastos(gastosSupabase.map(convertirGasto));
+            setCierres(cierresSupabase.map(convertirCierre));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el cierre de caja desde Supabase.";
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
-        const ventasGuardadas = localStorage.getItem("ventas_sistema_clinico");
-        const gastosGuardados = localStorage.getItem("gastos_sistema_clinico");
-        const cierresGuardados = localStorage.getItem(
-            "cierres_caja_sistema_clinico"
-        );
-
-        if (usuarioGuardado) {
-            setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
-        }
-
-        setConfiguracion(obtenerConfiguracionClinica());
-
-        if (ventasGuardadas) {
-            setVentas(JSON.parse(ventasGuardadas) as Venta[]);
-        }
-
-        if (gastosGuardados) {
-            setGastos(JSON.parse(gastosGuardados) as Gasto[]);
-        }
-
-        if (cierresGuardados) {
-            setCierres(JSON.parse(cierresGuardados) as CierreCaja[]);
-        }
-    }, []);
-
-    function guardarCierres(nuevaLista: CierreCaja[]) {
-        setCierres(nuevaLista);
-        localStorage.setItem(
-            "cierres_caja_sistema_clinico",
-            JSON.stringify(nuevaLista)
-        );
-    }
+        cargarDatos();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fechaSeleccionada]);
 
     function actualizarCampo<K extends keyof FormularioCierre>(
         campo: K,
         valor: FormularioCierre[K]
     ) {
-        setFormulario((datosActuales) => ({
-            ...datosActuales,
-            [campo]: valor,
-        }));
+        setFormulario((datosActuales) => ({ ...datosActuales, [campo]: valor }));
     }
 
     const ventasDia = useMemo(() => {
@@ -230,62 +313,28 @@ export default function CierreCajaPage() {
     }, [gastos, fechaSeleccionada]);
 
     const cierreExistente = cierres.find(
-        (cierre) => cierre.fecha === fechaSeleccionada
+        (cierre) => cierre.fecha === fechaSeleccionada && cierre.estado !== "Anulado"
     );
 
-    const ventasBrutas = ventasDia.reduce(
-        (total, venta) => total + (venta.total || 0),
-        0
-    );
-
-    const efectivoSistema = ventasDia.reduce(
-        (total, venta) => total + (venta.efectivo || 0),
-        0
-    );
-
-    const tarjetaSistema = ventasDia.reduce(
-        (total, venta) => total + (venta.tarjeta || 0),
-        0
-    );
-
-    const transferenciaSistema = ventasDia.reduce(
-        (total, venta) => total + (venta.transferencia || 0),
-        0
-    );
-
-    const creditoGenerado = ventasDia.reduce(
-        (total, venta) => total + (venta.credito || 0),
-        0
-    );
+    const ventasBrutas = ventasDia.reduce((total, venta) => total + venta.total, 0);
+    const efectivoSistema = ventasDia.reduce((total, venta) => total + venta.efectivo, 0);
+    const tarjetaSistema = ventasDia.reduce((total, venta) => total + venta.tarjeta, 0);
+    const transferenciaSistema = ventasDia.reduce((total, venta) => total + venta.transferencia, 0);
+    const creditoGenerado = ventasDia.reduce((total, venta) => total + venta.credito, 0);
 
     const gastosEfectivo = gastosDia
         .filter((gasto) => gasto.metodoPago === "Efectivo")
-        .reduce((total, gasto) => total + (gasto.monto || 0), 0);
-
+        .reduce((total, gasto) => total + gasto.monto, 0);
     const gastosTarjeta = gastosDia
         .filter((gasto) => gasto.metodoPago === "Tarjeta")
-        .reduce((total, gasto) => total + (gasto.monto || 0), 0);
-
+        .reduce((total, gasto) => total + gasto.monto, 0);
     const gastosTransferencia = gastosDia
         .filter((gasto) => gasto.metodoPago === "Transferencia")
-        .reduce((total, gasto) => total + (gasto.monto || 0), 0);
+        .reduce((total, gasto) => total + gasto.monto, 0);
+    const gastosTotal = gastosDia.reduce((total, gasto) => total + gasto.monto, 0);
 
-    const gastosOtros = gastosDia
-        .filter(
-            (gasto) =>
-                gasto.metodoPago !== "Efectivo" &&
-                gasto.metodoPago !== "Tarjeta" &&
-                gasto.metodoPago !== "Transferencia"
-        )
-        .reduce((total, gasto) => total + (gasto.monto || 0), 0);
-
-    const gastosTotal = gastosDia.reduce(
-        (total, gasto) => total + (gasto.monto || 0),
-        0
-    );
-
-    const comisionPOS = tarjetaSistema * (configuracion.comisionPOS / 100);
-    const netoTarjeta = tarjetaSistema - comisionPOS;
+    const comisionPOS = ventasDia.reduce((total, venta) => total + venta.comisionTarjeta, 0);
+    const netoTarjeta = ventasDia.reduce((total, venta) => total + venta.netoTarjeta, 0);
 
     const efectivoEsperado = efectivoSistema - gastosEfectivo;
     const tarjetaEsperada = tarjetaSistema - gastosTarjeta;
@@ -298,15 +347,10 @@ export default function CierreCajaPage() {
     const diferenciaEfectivo = efectivoContado - efectivoEsperado;
     const diferenciaTarjeta = tarjetaReportada - tarjetaEsperada;
     const diferenciaTransferencia = transferenciaReportada - transferenciaEsperada;
+    const diferenciaTotal = diferenciaEfectivo + diferenciaTarjeta + diferenciaTransferencia;
 
-    const totalCobrado =
-        efectivoSistema + tarjetaSistema + transferenciaSistema;
-
-    const totalNetoCaja =
-        efectivoEsperado + transferenciaEsperada + netoTarjeta - gastosTarjeta;
-
-    const diferenciaTotal =
-        diferenciaEfectivo + diferenciaTarjeta + diferenciaTransferencia;
+    const totalCobrado = efectivoSistema + tarjetaSistema + transferenciaSistema;
+    const totalNetoCaja = efectivoEsperado + transferenciaEsperada + netoTarjeta - gastosTarjeta;
 
     function cargarMontosSistema() {
         setFormulario((datos) => ({
@@ -321,7 +365,7 @@ export default function CierreCajaPage() {
         setFormulario(formularioVacio);
     }
 
-    function registrarCierre(event: FormEvent<HTMLFormElement>) {
+    async function registrarCierre(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (cierreExistente) {
@@ -333,60 +377,81 @@ export default function CierreCajaPage() {
             const confirmar = window.confirm(
                 "No hay ventas ni gastos para esta fecha. ¿Deseas registrar cierre en cero?"
             );
-
             if (!confirmar) return;
         }
 
-        const estado =
+        const estado: EstadoCierreCajaSupabase =
             Math.abs(diferenciaEfectivo) < 0.01 &&
                 Math.abs(diferenciaTarjeta) < 0.01 &&
                 Math.abs(diferenciaTransferencia) < 0.01
                 ? "Cuadrado"
                 : "Con diferencia";
 
-        const nuevoCierre: CierreCaja = {
-            id: `CIERRE-${Date.now()}`,
-            fecha: fechaSeleccionada,
-            hora: horaActualLocal(),
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            ventasCantidad: ventasDia.length,
-            ventasBrutas,
-            efectivoSistema,
-            tarjetaSistema,
-            transferenciaSistema,
-            creditoGenerado,
-            gastosEfectivo,
-            gastosTarjeta,
-            gastosTransferencia,
-            gastosTotal,
-            comisionPOS,
-            netoTarjeta,
-            efectivoEsperado,
-            efectivoContado,
-            tarjetaReportada,
-            transferenciaReportada,
-            diferenciaEfectivo,
-            diferenciaTarjeta,
-            diferenciaTransferencia,
-            estado,
-            observaciones: formulario.observaciones.trim(),
-        };
+        setGuardando(true);
 
-        guardarCierres([nuevoCierre, ...cierres]);
-        limpiarFormulario();
+        try {
+            await crearCierreCajaSupabase({
+                fecha: fechaSeleccionada,
+                usuario_nombre: usuario?.nombre || "Usuario no identificado",
+                ventas_cantidad: ventasDia.length,
+                ventas_brutas: ventasBrutas,
+                efectivo_sistema: efectivoSistema,
+                tarjeta_sistema: tarjetaSistema,
+                transferencia_sistema: transferenciaSistema,
+                credito_generado: creditoGenerado,
+                gastos_efectivo: gastosEfectivo,
+                gastos_tarjeta: gastosTarjeta,
+                gastos_transferencia: gastosTransferencia,
+                gastos_total: gastosTotal,
+                comision_pos: comisionPOS,
+                neto_tarjeta: netoTarjeta,
+                efectivo_esperado: efectivoEsperado,
+                efectivo_contado: efectivoContado,
+                tarjeta_esperada: tarjetaEsperada,
+                tarjeta_reportada: tarjetaReportada,
+                transferencia_esperada: transferenciaEsperada,
+                transferencia_reportada: transferenciaReportada,
+                diferencia_efectivo: diferenciaEfectivo,
+                diferencia_tarjeta: diferenciaTarjeta,
+                diferencia_transferencia: diferenciaTransferencia,
+                estado,
+                observaciones: formulario.observaciones.trim(),
+            });
 
-        alert("Cierre de caja registrado correctamente.");
+            limpiarFormulario();
+            await cargarDatos();
+            alert("Cierre de caja registrado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo registrar el cierre.";
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
-    function eliminarCierre(cierre: CierreCaja) {
+    async function eliminarCierre(cierre: CierreCaja) {
         const confirmar = window.confirm(
-            "¿Seguro que deseas eliminar este cierre? Esto permitirá volver a cerrar esa fecha."
+            "¿Seguro que deseas anular este cierre? Esto permitirá registrar otro cierre para esa fecha."
         );
-
         if (!confirmar) return;
 
-        const nuevaLista = cierres.filter((item) => item.id !== cierre.id);
-        guardarCierres(nuevaLista);
+        setGuardando(true);
+        try {
+            await anularCierreCajaSupabase(cierre.id);
+            await cargarDatos();
+            alert("Cierre anulado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo anular el cierre.";
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
     function imprimirCierre(cierre?: CierreCaja) {
@@ -394,20 +459,17 @@ export default function CierreCajaPage() {
             alert("Primero registra el cierre para imprimirlo.");
             return;
         }
-
         window.print();
     }
 
     const cierresFiltrados = cierres.filter((cierre) => {
-        const texto = busqueda.toLowerCase().trim();
-
+        const texto = normalizarTexto(busqueda);
         if (!texto) return true;
-
         return (
-            cierre.fecha.toLowerCase().includes(texto) ||
-            cierre.usuarioNombre.toLowerCase().includes(texto) ||
-            cierre.estado.toLowerCase().includes(texto) ||
-            cierre.id.toLowerCase().includes(texto)
+            normalizarTexto(cierre.fecha).includes(texto) ||
+            normalizarTexto(cierre.usuarioNombre).includes(texto) ||
+            normalizarTexto(cierre.estado).includes(texto) ||
+            normalizarTexto(cierre.id).includes(texto)
         );
     });
 
@@ -417,77 +479,57 @@ export default function CierreCajaPage() {
             descripcion="Cuadre diario de efectivo, tarjeta, transferencias, créditos, gastos y diferencias"
             moduloActivo="Cierre de Caja"
         >
+            {error && (
+                <section className="print:hidden mb-4 rounded-2xl border border-red-100 bg-red-50 px-5 py-4">
+                    <div className="flex items-start gap-3">
+                        <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">No se pudo cargar cierre de caja</h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">{error}</p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="print:hidden mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">Cierre conectado a Supabase</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Ventas, gastos y cierres se leen desde Supabase.</p>
+                </div>
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando || guardando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    Recargar
+                </button>
+            </section>
+
             <section className="print:hidden grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
-                    <div className="flex items-start justify-between">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700">
-                            <Banknote className="h-[18px] w-[18px]" />
-                        </div>
-                        <span className="mono rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
-                            Cobrado
-                        </span>
-                    </div>
-
-                    <h3 className="mt-4 text-[24px] font-bold leading-none text-slate-800">
-                        {formatoMoneda(totalCobrado, configuracion.simboloMoneda)}
-                    </h3>
-                    <p className="mt-1 text-[12px] font-semibold text-slate-500">
-                        Total cobrado del día
-                    </p>
+                    <Banknote className="h-5 w-5 text-emerald-700" />
+                    <h3 className="mt-4 text-[24px] font-bold leading-none text-slate-800">{formatoMoneda(totalCobrado, configuracion.simboloMoneda)}</h3>
+                    <p className="mt-1 text-[12px] font-semibold text-slate-500">Total cobrado del día</p>
                 </div>
 
                 <div className="glass-card rounded-2xl p-5">
-                    <div className="flex items-start justify-between">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-700">
-                            <CreditCard className="h-[18px] w-[18px]" />
-                        </div>
-                        <span className="mono rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-700">
-                            POS
-                        </span>
-                    </div>
-
-                    <h3 className="mt-4 text-[24px] font-bold leading-none text-slate-800">
-                        {formatoMoneda(comisionPOS, configuracion.simboloMoneda)}
-                    </h3>
-                    <p className="mt-1 text-[12px] font-semibold text-slate-500">
-                        Comisión tarjeta
-                    </p>
+                    <CreditCard className="h-5 w-5 text-blue-700" />
+                    <h3 className="mt-4 text-[24px] font-bold leading-none text-slate-800">{formatoMoneda(comisionPOS, configuracion.simboloMoneda)}</h3>
+                    <p className="mt-1 text-[12px] font-semibold text-slate-500">Comisión tarjeta</p>
                 </div>
 
                 <div className="glass-card rounded-2xl p-5">
-                    <div className="flex items-start justify-between">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-red-50 text-red-700">
-                            <ReceiptText className="h-[18px] w-[18px]" />
-                        </div>
-                        <span className="mono rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold text-red-700">
-                            Gastos
-                        </span>
-                    </div>
-
-                    <h3 className="mt-4 text-[24px] font-bold leading-none text-slate-800">
-                        {formatoMoneda(gastosTotal, configuracion.simboloMoneda)}
-                    </h3>
-                    <p className="mt-1 text-[12px] font-semibold text-slate-500">
-                        Gastos activos del día
-                    </p>
+                    <ReceiptText className="h-5 w-5 text-red-700" />
+                    <h3 className="mt-4 text-[24px] font-bold leading-none text-slate-800">{formatoMoneda(gastosTotal, configuracion.simboloMoneda)}</h3>
+                    <p className="mt-1 text-[12px] font-semibold text-slate-500">Gastos activos del día</p>
                 </div>
 
                 <div className="glass-card rounded-2xl p-5">
-                    <div className="flex items-start justify-between">
-                        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                            <Wallet className="h-[18px] w-[18px]" />
-                        </div>
-                        <span className="mono rounded-full bg-teal-50 px-2 py-0.5 text-[10px] font-bold text-teal-700">
-                            Neto
-                        </span>
-                    </div>
-
-                    <h3 className="mt-4 text-[24px] font-bold leading-none text-slate-800">
-                        {formatoMoneda(totalNetoCaja, configuracion.simboloMoneda)}
-                    </h3>
-                    <p className="mt-1 text-[12px] font-semibold text-slate-500">
-                        Neto estimado del día
-                    </p>
+                    <Wallet className="h-5 w-5 text-teal-700" />
+                    <h3 className="mt-4 text-[24px] font-bold leading-none text-slate-800">{formatoMoneda(totalNetoCaja, configuracion.simboloMoneda)}</h3>
+                    <p className="mt-1 text-[12px] font-semibold text-slate-500">Neto estimado del día</p>
                 </div>
             </section>
 
@@ -496,14 +538,9 @@ export default function CierreCajaPage() {
                     <div className="flex items-start gap-3">
                         <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
                         <div>
-                            <h3 className="text-sm font-black text-emerald-800">
-                                Esta fecha ya fue cerrada
-                            </h3>
+                            <h3 className="text-sm font-black text-emerald-800">Esta fecha ya fue cerrada</h3>
                             <p className="mt-1 text-xs leading-5 text-emerald-700">
-                                El cierre de {fechaSeleccionada} fue registrado por{" "}
-                                <strong>{cierreExistente.usuarioNombre}</strong> a las{" "}
-                                <strong>{cierreExistente.hora}</strong>. Estado:{" "}
-                                <strong>{cierreExistente.estado}</strong>.
+                                El cierre de {fechaSeleccionada} fue registrado por <strong>{cierreExistente.usuarioNombre}</strong> a las <strong>{cierreExistente.hora}</strong>. Estado: <strong>{cierreExistente.estado}</strong>.
                             </p>
                         </div>
                     </div>
@@ -516,25 +553,16 @@ export default function CierreCajaPage() {
                         <div className="border-b border-black/[0.04] px-6 py-4">
                             <div className="flex items-start justify-between gap-3">
                                 <div>
-                                    <h3 className="text-[16px] font-bold text-slate-800">
-                                        Registrar cierre
-                                    </h3>
-                                    <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                        Conteo real contra montos del sistema
-                                    </p>
+                                    <h3 className="text-[16px] font-bold text-slate-800">Registrar cierre</h3>
+                                    <p className="mono mt-0.5 text-[10px] text-slate-400">Conteo real contra montos del sistema</p>
                                 </div>
-
-                                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-teal-50 text-teal-700">
-                                    <Calculator className="h-[18px] w-[18px]" />
-                                </div>
+                                <Calculator className="h-5 w-5 text-teal-700" />
                             </div>
                         </div>
 
                         <form onSubmit={registrarCierre} className="p-6">
                             <div>
-                                <label className="mb-2 block text-xs font-bold text-slate-600">
-                                    Fecha a cerrar
-                                </label>
+                                <label className="mb-2 block text-xs font-bold text-slate-600">Fecha a cerrar</label>
                                 <input
                                     value={fechaSeleccionada}
                                     onChange={(event) => {
@@ -547,53 +575,22 @@ export default function CierreCajaPage() {
                             </div>
 
                             <div className="mt-4 rounded-3xl bg-slate-50 p-5">
-                                <h4 className="text-sm font-black text-slate-800">
-                                    Valores esperados por sistema
-                                </h4>
-
+                                <h4 className="text-sm font-black text-slate-800">Valores esperados por sistema</h4>
                                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                                     <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[11px] font-bold text-slate-400">
-                                            Efectivo esperado
-                                        </p>
-                                        <p className="mt-1 text-sm font-black text-emerald-700">
-                                            {formatoMoneda(
-                                                efectivoEsperado,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </p>
+                                        <p className="text-[11px] font-bold text-slate-400">Efectivo esperado</p>
+                                        <p className="mt-1 text-sm font-black text-emerald-700">{formatoMoneda(efectivoEsperado, configuracion.simboloMoneda)}</p>
                                     </div>
-
                                     <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[11px] font-bold text-slate-400">
-                                            Tarjeta esperada
-                                        </p>
-                                        <p className="mt-1 text-sm font-black text-blue-700">
-                                            {formatoMoneda(
-                                                tarjetaEsperada,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </p>
+                                        <p className="text-[11px] font-bold text-slate-400">Tarjeta esperada</p>
+                                        <p className="mt-1 text-sm font-black text-blue-700">{formatoMoneda(tarjetaEsperada, configuracion.simboloMoneda)}</p>
                                     </div>
-
                                     <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[11px] font-bold text-slate-400">
-                                            Transferencia esperada
-                                        </p>
-                                        <p className="mt-1 text-sm font-black text-indigo-700">
-                                            {formatoMoneda(
-                                                transferenciaEsperada,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </p>
+                                        <p className="text-[11px] font-bold text-slate-400">Transferencia esperada</p>
+                                        <p className="mt-1 text-sm font-black text-indigo-700">{formatoMoneda(transferenciaEsperada, configuracion.simboloMoneda)}</p>
                                     </div>
                                 </div>
-
-                                <button
-                                    type="button"
-                                    onClick={cargarMontosSistema}
-                                    className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800"
-                                >
+                                <button type="button" onClick={cargarMontosSistema} className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800">
                                     <CheckCircle2 className="h-4 w-4" />
                                     Usar montos del sistema
                                 </button>
@@ -601,162 +598,57 @@ export default function CierreCajaPage() {
 
                             <div className="mt-4 grid gap-4 md:grid-cols-3">
                                 <div>
-                                    <label className="mb-2 block text-xs font-bold text-slate-600">
-                                        Efectivo contado
-                                    </label>
-                                    <input
-                                        value={formulario.efectivoContado}
-                                        onChange={(event) =>
-                                            actualizarCampo("efectivoContado", event.target.value)
-                                        }
-                                        type="number"
-                                        placeholder="0.00"
-                                        disabled={!!cierreExistente}
-                                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100"
-                                    />
+                                    <label className="mb-2 block text-xs font-bold text-slate-600">Efectivo contado</label>
+                                    <input value={formulario.efectivoContado} onChange={(event) => actualizarCampo("efectivoContado", event.target.value)} type="number" placeholder="0.00" disabled={!!cierreExistente} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100" />
                                 </div>
-
                                 <div>
-                                    <label className="mb-2 block text-xs font-bold text-slate-600">
-                                        Tarjeta reportada
-                                    </label>
-                                    <input
-                                        value={formulario.tarjetaReportada}
-                                        onChange={(event) =>
-                                            actualizarCampo("tarjetaReportada", event.target.value)
-                                        }
-                                        type="number"
-                                        placeholder="0.00"
-                                        disabled={!!cierreExistente}
-                                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100"
-                                    />
+                                    <label className="mb-2 block text-xs font-bold text-slate-600">Tarjeta reportada</label>
+                                    <input value={formulario.tarjetaReportada} onChange={(event) => actualizarCampo("tarjetaReportada", event.target.value)} type="number" placeholder="0.00" disabled={!!cierreExistente} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100" />
                                 </div>
-
                                 <div>
-                                    <label className="mb-2 block text-xs font-bold text-slate-600">
-                                        Transferencia reportada
-                                    </label>
-                                    <input
-                                        value={formulario.transferenciaReportada}
-                                        onChange={(event) =>
-                                            actualizarCampo("transferenciaReportada", event.target.value)
-                                        }
-                                        type="number"
-                                        placeholder="0.00"
-                                        disabled={!!cierreExistente}
-                                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100"
-                                    />
+                                    <label className="mb-2 block text-xs font-bold text-slate-600">Transferencia reportada</label>
+                                    <input value={formulario.transferenciaReportada} onChange={(event) => actualizarCampo("transferenciaReportada", event.target.value)} type="number" placeholder="0.00" disabled={!!cierreExistente} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100" />
                                 </div>
                             </div>
 
                             <div className="mt-4 rounded-3xl bg-slate-50 p-5">
-                                <h4 className="text-sm font-black text-slate-800">
-                                    Diferencias
-                                </h4>
-
+                                <h4 className="text-sm font-black text-slate-800">Diferencias</h4>
                                 <div className="mt-4 grid gap-3 md:grid-cols-3">
                                     <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[11px] font-bold text-slate-400">
-                                            Efectivo
-                                        </p>
-                                        <p
-                                            className={`mt-1 text-sm font-black ${colorDiferencia(
-                                                diferenciaEfectivo
-                                            )}`}
-                                        >
-                                            {textoDiferencia(
-                                                diferenciaEfectivo,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </p>
+                                        <p className="text-[11px] font-bold text-slate-400">Efectivo</p>
+                                        <p className={`mt-1 text-sm font-black ${colorDiferencia(diferenciaEfectivo)}`}>{textoDiferencia(diferenciaEfectivo, configuracion.simboloMoneda)}</p>
                                     </div>
-
                                     <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[11px] font-bold text-slate-400">
-                                            Tarjeta
-                                        </p>
-                                        <p
-                                            className={`mt-1 text-sm font-black ${colorDiferencia(
-                                                diferenciaTarjeta
-                                            )}`}
-                                        >
-                                            {textoDiferencia(
-                                                diferenciaTarjeta,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </p>
+                                        <p className="text-[11px] font-bold text-slate-400">Tarjeta</p>
+                                        <p className={`mt-1 text-sm font-black ${colorDiferencia(diferenciaTarjeta)}`}>{textoDiferencia(diferenciaTarjeta, configuracion.simboloMoneda)}</p>
                                     </div>
-
                                     <div className="rounded-2xl bg-white p-4">
-                                        <p className="text-[11px] font-bold text-slate-400">
-                                            Transferencia
-                                        </p>
-                                        <p
-                                            className={`mt-1 text-sm font-black ${colorDiferencia(
-                                                diferenciaTransferencia
-                                            )}`}
-                                        >
-                                            {textoDiferencia(
-                                                diferenciaTransferencia,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </p>
+                                        <p className="text-[11px] font-bold text-slate-400">Transferencia</p>
+                                        <p className={`mt-1 text-sm font-black ${colorDiferencia(diferenciaTransferencia)}`}>{textoDiferencia(diferenciaTransferencia, configuracion.simboloMoneda)}</p>
                                     </div>
                                 </div>
-
                                 {Math.abs(diferenciaTotal) > 0.01 && (
                                     <div className="mt-4 rounded-2xl border border-amber-100 bg-amber-50 p-4">
                                         <p className="flex items-center gap-2 text-xs font-bold text-amber-800">
                                             <AlertTriangle className="h-4 w-4" />
-                                            Hay diferencia total de{" "}
-                                            {formatoMoneda(
-                                                diferenciaTotal,
-                                                configuracion.simboloMoneda
-                                            )}
-                                            . Podés cerrar, pero quedará marcado con diferencia.
+                                            Hay diferencia total de {formatoMoneda(diferenciaTotal, configuracion.simboloMoneda)}. Podés cerrar, pero quedará marcado con diferencia.
                                         </p>
                                     </div>
                                 )}
                             </div>
 
                             <div className="mt-4">
-                                <label className="mb-2 block text-xs font-bold text-slate-600">
-                                    Observaciones del cierre
-                                </label>
-                                <textarea
-                                    value={formulario.observaciones}
-                                    onChange={(event) =>
-                                        actualizarCampo("observaciones", event.target.value)
-                                    }
-                                    rows={4}
-                                    placeholder="Notas, motivo de diferencias, referencias POS..."
-                                    disabled={!!cierreExistente}
-                                    className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100"
-                                />
+                                <label className="mb-2 block text-xs font-bold text-slate-600">Observaciones del cierre</label>
+                                <textarea value={formulario.observaciones} onChange={(event) => actualizarCampo("observaciones", event.target.value)} rows={4} placeholder="Notas, motivo de diferencias, referencias POS..." disabled={!!cierreExistente} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100 disabled:bg-slate-100" />
                             </div>
 
                             <div className="mt-5 flex flex-wrap gap-2">
-                                <button
-                                    disabled={!!cierreExistente}
-                                    className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
+                                <button disabled={!!cierreExistente || guardando} className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
                                     <LockKeyhole className="h-4 w-4" />
-                                    Registrar cierre
+                                    {guardando ? "Guardando..." : "Registrar cierre"}
                                 </button>
-
-                                <button
-                                    type="button"
-                                    onClick={limpiarFormulario}
-                                    className="rounded-xl bg-white px-5 py-3 text-[12px] font-bold text-slate-600 shadow-sm hover:bg-slate-50"
-                                >
-                                    Limpiar
-                                </button>
-
-                                <button
-                                    type="button"
-                                    onClick={() => imprimirCierre(cierreExistente)}
-                                    className="flex items-center gap-2 rounded-xl bg-blue-50 px-5 py-3 text-[12px] font-bold text-blue-700 hover:bg-blue-100"
-                                >
+                                <button type="button" onClick={limpiarFormulario} className="rounded-xl bg-white px-5 py-3 text-[12px] font-bold text-slate-600 shadow-sm hover:bg-slate-50">Limpiar</button>
+                                <button type="button" onClick={() => imprimirCierre(cierreExistente)} className="flex items-center gap-2 rounded-xl bg-blue-50 px-5 py-3 text-[12px] font-bold text-blue-700 hover:bg-blue-100">
                                     <Printer className="h-4 w-4" />
                                     Imprimir
                                 </button>
@@ -768,199 +660,58 @@ export default function CierreCajaPage() {
                 <div className="space-y-4">
                     <div className="glass-card overflow-hidden rounded-2xl">
                         <div className="border-b border-black/[0.04] px-6 py-4">
-                            <h3 className="text-[16px] font-bold text-slate-800">
-                                Resumen del día
-                            </h3>
-                            <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                Ventas, gastos, créditos y comisión POS
-                            </p>
+                            <h3 className="text-[16px] font-bold text-slate-800">Resumen del día</h3>
+                            <p className="mono mt-0.5 text-[10px] text-slate-400">Ventas, gastos, créditos y comisión POS</p>
                         </div>
-
                         <div className="p-6">
                             <div className="grid gap-3 md:grid-cols-2">
-                                <div className="rounded-2xl bg-emerald-50 p-4">
-                                    <p className="text-[11px] font-bold text-emerald-700">
-                                        Efectivo ventas
-                                    </p>
-                                    <p className="mt-1 text-sm font-black text-emerald-700">
-                                        {formatoMoneda(
-                                            efectivoSistema,
-                                            configuracion.simboloMoneda
-                                        )}
-                                    </p>
-                                </div>
-
-                                <div className="rounded-2xl bg-red-50 p-4">
-                                    <p className="text-[11px] font-bold text-red-700">
-                                        Gastos efectivo
-                                    </p>
-                                    <p className="mt-1 text-sm font-black text-red-700">
-                                        {formatoMoneda(gastosEfectivo, configuracion.simboloMoneda)}
-                                    </p>
-                                </div>
-
-                                <div className="rounded-2xl bg-blue-50 p-4">
-                                    <p className="text-[11px] font-bold text-blue-700">
-                                        Tarjeta ventas
-                                    </p>
-                                    <p className="mt-1 text-sm font-black text-blue-700">
-                                        {formatoMoneda(tarjetaSistema, configuracion.simboloMoneda)}
-                                    </p>
-                                </div>
-
-                                <div className="rounded-2xl bg-slate-50 p-4">
-                                    <p className="text-[11px] font-bold text-slate-500">
-                                        Neto tarjeta
-                                    </p>
-                                    <p className="mt-1 text-sm font-black text-slate-800">
-                                        {formatoMoneda(netoTarjeta, configuracion.simboloMoneda)}
-                                    </p>
-                                </div>
-
-                                <div className="rounded-2xl bg-indigo-50 p-4">
-                                    <p className="text-[11px] font-bold text-indigo-700">
-                                        Transferencias
-                                    </p>
-                                    <p className="mt-1 text-sm font-black text-indigo-700">
-                                        {formatoMoneda(
-                                            transferenciaSistema,
-                                            configuracion.simboloMoneda
-                                        )}
-                                    </p>
-                                </div>
-
-                                <div className="rounded-2xl bg-amber-50 p-4">
-                                    <p className="text-[11px] font-bold text-amber-700">
-                                        Crédito generado
-                                    </p>
-                                    <p className="mt-1 text-sm font-black text-amber-700">
-                                        {formatoMoneda(creditoGenerado, configuracion.simboloMoneda)}
-                                    </p>
-                                </div>
+                                <ResumenItem titulo="Efectivo ventas" valor={efectivoSistema} color="emerald" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Gastos efectivo" valor={gastosEfectivo} color="red" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Tarjeta ventas" valor={tarjetaSistema} color="blue" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Neto tarjeta" valor={netoTarjeta} color="slate" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Transferencias" valor={transferenciaSistema} color="indigo" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Crédito generado" valor={creditoGenerado} color="amber" simbolo={configuracion.simboloMoneda} />
                             </div>
-
                             <div className="mt-4 rounded-3xl bg-slate-900 p-5 text-white">
-                                <div className="flex items-center justify-between gap-3">
+                                <p className="mono text-[10px] font-bold uppercase tracking-[0.14em] text-white/40">Resultado del día</p>
+                                <h4 className="mt-2 text-xl font-black">{formatoMoneda(totalNetoCaja, configuracion.simboloMoneda)}</h4>
+                                <p className="mt-3 text-xs leading-5 text-white/50">Neto estimado considerando efectivo esperado, transferencias, tarjeta neta y gastos por métodos principales.</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <ListaSimple titulo="Ventas del día" vacio="No hay ventas activas en esta fecha." icono="venta">
+                        {cargando && <p className="rounded-2xl border border-teal-100 bg-teal-50 p-6 text-center text-xs font-bold text-teal-700">Cargando ventas desde Supabase...</p>}
+                        {!cargando && ventasDia.map((venta) => (
+                            <div key={venta.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                                <div className="flex items-start justify-between gap-3">
                                     <div>
-                                        <p className="mono text-[10px] font-bold uppercase tracking-[0.14em] text-white/40">
-                                            Resultado del día
-                                        </p>
-                                        <h4 className="mt-2 text-xl font-black">
-                                            {formatoMoneda(totalNetoCaja, configuracion.simboloMoneda)}
-                                        </h4>
+                                        <h4 className="text-sm font-black text-slate-800">{venta.clienteNombre}</h4>
+                                        <p className="mt-1 text-xs text-slate-500">{venta.concepto}</p>
                                     </div>
-
-                                    <Wallet className="h-8 w-8 text-teal-300" />
+                                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">{formatoMoneda(venta.total, configuracion.simboloMoneda)}</span>
                                 </div>
-
-                                <p className="mt-3 text-xs leading-5 text-white/50">
-                                    Neto estimado considerando efectivo esperado, transferencias,
-                                    tarjeta neta y gastos por métodos principales.
-                                </p>
+                                <p className="mono mt-3 text-[10px] text-slate-400">{venta.hora} · {venta.tipoCobro} · {venta.estado}</p>
                             </div>
-                        </div>
-                    </div>
+                        ))}
+                        {!cargando && ventasDia.length === 0 && <Vacio texto="No hay ventas activas en esta fecha." />}
+                    </ListaSimple>
 
-                    <div className="glass-card overflow-hidden rounded-2xl">
-                        <div className="border-b border-black/[0.04] px-6 py-4">
-                            <h3 className="text-[16px] font-bold text-slate-800">
-                                Ventas del día
-                            </h3>
-                            <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                {ventasDia.length} venta(s) activa(s)
-                            </p>
-                        </div>
-
-                        <div className="max-h-[420px] overflow-y-auto p-4">
-                            <div className="space-y-3">
-                                {ventasDia.map((venta) => (
-                                    <div
-                                        key={venta.id}
-                                        className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm"
-                                    >
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div>
-                                                <h4 className="text-sm font-black text-slate-800">
-                                                    {venta.clienteNombre}
-                                                </h4>
-                                                <p className="mt-1 text-xs text-slate-500">
-                                                    {venta.concepto}
-                                                </p>
-                                            </div>
-
-                                            <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-emerald-700">
-                                                {formatoMoneda(venta.total, configuracion.simboloMoneda)}
-                                            </span>
-                                        </div>
-
-                                        <p className="mono mt-3 text-[10px] text-slate-400">
-                                            {venta.hora} · {venta.tipoCobro} · {venta.estado}
-                                        </p>
+                    <ListaSimple titulo="Gastos del día" vacio="No hay gastos activos en esta fecha." icono="gasto">
+                        {gastosDia.map((gasto) => (
+                            <div key={gasto.id} className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <h4 className="text-sm font-black text-slate-800">{gasto.descripcion}</h4>
+                                        <p className="mt-1 text-xs text-slate-500">{gasto.categoria}</p>
                                     </div>
-                                ))}
-
-                                {ventasDia.length === 0 && (
-                                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-8 text-center">
-                                        <ReceiptText className="mx-auto h-8 w-8 text-slate-300" />
-                                        <p className="mt-3 text-xs font-medium text-slate-400">
-                                            No hay ventas activas en esta fecha.
-                                        </p>
-                                    </div>
-                                )}
+                                    <span className="rounded-full bg-red-50 px-2.5 py-1 text-[10px] font-bold text-red-700">{formatoMoneda(gasto.monto, configuracion.simboloMoneda)}</span>
+                                </div>
+                                <p className="mono mt-3 text-[10px] text-slate-400">{gasto.hora} · {gasto.metodoPago} · {gasto.proveedor || "Sin proveedor"}</p>
                             </div>
-                        </div>
-                    </div>
-
-                    <div className="glass-card overflow-hidden rounded-2xl">
-                        <div className="border-b border-black/[0.04] px-6 py-4">
-                            <h3 className="text-[16px] font-bold text-slate-800">
-                                Gastos del día
-                            </h3>
-                            <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                {gastosDia.length} gasto(s) activo(s)
-                            </p>
-                        </div>
-
-                        <div className="max-h-[420px] overflow-y-auto p-4">
-                            <div className="space-y-3">
-                                {gastosDia.map((gasto) => (
-                                    <div
-                                        key={gasto.id}
-                                        className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm"
-                                    >
-                                        <div className="flex items-start justify-between gap-3">
-                                            <div>
-                                                <h4 className="text-sm font-black text-slate-800">
-                                                    {gasto.descripcion}
-                                                </h4>
-                                                <p className="mt-1 text-xs text-slate-500">
-                                                    {gasto.categoria}
-                                                </p>
-                                            </div>
-
-                                            <span className="rounded-full bg-red-50 px-2.5 py-1 text-[10px] font-bold text-red-700">
-                                                {formatoMoneda(gasto.monto, configuracion.simboloMoneda)}
-                                            </span>
-                                        </div>
-
-                                        <p className="mono mt-3 text-[10px] text-slate-400">
-                                            {gasto.hora} · {gasto.metodoPago} ·{" "}
-                                            {gasto.proveedor || "Sin proveedor"}
-                                        </p>
-                                    </div>
-                                ))}
-
-                                {gastosDia.length === 0 && (
-                                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-8 text-center">
-                                        <FileText className="mx-auto h-8 w-8 text-slate-300" />
-                                        <p className="mt-3 text-xs font-medium text-slate-400">
-                                            No hay gastos activos en esta fecha.
-                                        </p>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
+                        ))}
+                        {gastosDia.length === 0 && <Vacio texto="No hay gastos activos en esta fecha." />}
+                    </ListaSimple>
                 </div>
             </section>
 
@@ -968,22 +719,12 @@ export default function CierreCajaPage() {
                 <div className="border-b border-black/[0.04] px-6 py-4">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                         <div>
-                            <h3 className="text-[16px] font-bold text-slate-800">
-                                Historial de cierres
-                            </h3>
-                            <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                Cierres registrados, cuadrados o con diferencias
-                            </p>
+                            <h3 className="text-[16px] font-bold text-slate-800">Historial de cierres</h3>
+                            <p className="mono mt-0.5 text-[10px] text-slate-400">Cierres registrados, cuadrados o con diferencias</p>
                         </div>
-
                         <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 md:w-80">
                             <Search className="h-4 w-4 text-slate-400" />
-                            <input
-                                value={busqueda}
-                                onChange={(event) => setBusqueda(event.target.value)}
-                                placeholder="Buscar cierre..."
-                                className="w-full bg-transparent text-[13px] font-medium outline-none"
-                            />
+                            <input value={busqueda} onChange={(event) => setBusqueda(event.target.value)} placeholder="Buscar cierre..." className="w-full bg-transparent text-[13px] font-medium outline-none" />
                         </div>
                     </div>
                 </div>
@@ -992,210 +733,103 @@ export default function CierreCajaPage() {
                     <table className="w-full min-w-[1100px]">
                         <thead>
                             <tr className="border-b border-black/[0.04]">
-                                {[
-                                    "Fecha",
-                                    "Usuario",
-                                    "Ventas",
-                                    "Efectivo",
-                                    "Tarjeta",
-                                    "Transferencia",
-                                    "Diferencia",
-                                    "Estado",
-                                    "Acciones",
-                                ].map((titulo) => (
-                                    <th
-                                        key={titulo}
-                                        className="mono px-4 py-3 text-left text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400 first:pl-6"
-                                    >
-                                        {titulo}
-                                    </th>
+                                {["Fecha", "Usuario", "Ventas", "Efectivo", "Tarjeta", "Transferencia", "Diferencia", "Estado", "Acciones"].map((titulo) => (
+                                    <th key={titulo} className="mono px-4 py-3 text-left text-[9px] font-bold uppercase tracking-[0.12em] text-slate-400 first:pl-6">{titulo}</th>
                                 ))}
                             </tr>
                         </thead>
-
                         <tbody>
                             {cierresFiltrados.map((cierre) => {
-                                const diferencia =
-                                    cierre.diferenciaEfectivo +
-                                    cierre.diferenciaTarjeta +
-                                    cierre.diferenciaTransferencia;
-
+                                const diferencia = cierre.diferenciaEfectivo + cierre.diferenciaTarjeta + cierre.diferenciaTransferencia;
                                 return (
                                     <tr key={cierre.id} className="border-b border-black/[0.03]">
-                                        <td className="px-6 py-4">
-                                            <p className="text-[12px] font-bold text-slate-700">
-                                                {cierre.fecha}
-                                            </p>
-                                            <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                                {cierre.hora}
-                                            </p>
-                                        </td>
-
-                                        <td className="px-4 py-4 text-[12px] text-slate-500">
-                                            {cierre.usuarioNombre}
-                                        </td>
-
-                                        <td className="px-4 py-4">
-                                            <p className="text-[12px] font-black text-slate-800">
-                                                {cierre.ventasCantidad}
-                                            </p>
-                                            <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                                {formatoMoneda(
-                                                    cierre.ventasBrutas,
-                                                    configuracion.simboloMoneda
-                                                )}
-                                            </p>
-                                        </td>
-
-                                        <td className="px-4 py-4 text-[12px] text-slate-500">
-                                            {formatoMoneda(
-                                                cierre.efectivoContado,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </td>
-
-                                        <td className="px-4 py-4 text-[12px] text-slate-500">
-                                            {formatoMoneda(
-                                                cierre.tarjetaReportada,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </td>
-
-                                        <td className="px-4 py-4 text-[12px] text-slate-500">
-                                            {formatoMoneda(
-                                                cierre.transferenciaReportada,
-                                                configuracion.simboloMoneda
-                                            )}
-                                        </td>
-
-                                        <td
-                                            className={`px-4 py-4 text-[12px] font-black ${colorDiferencia(
-                                                diferencia
-                                            )}`}
-                                        >
-                                            {formatoMoneda(diferencia, configuracion.simboloMoneda)}
-                                        </td>
-
-                                        <td className="px-4 py-4">
-                                            <span
-                                                className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${cierre.estado === "Cuadrado"
-                                                        ? "bg-emerald-50 text-emerald-700"
-                                                        : "bg-amber-50 text-amber-700"
-                                                    }`}
-                                            >
-                                                {cierre.estado}
-                                            </span>
-                                        </td>
-
+                                        <td className="px-6 py-4"><p className="text-[12px] font-bold text-slate-700">{cierre.fecha}</p><p className="mono mt-0.5 text-[10px] text-slate-400">{cierre.hora}</p></td>
+                                        <td className="px-4 py-4 text-[12px] text-slate-500">{cierre.usuarioNombre}</td>
+                                        <td className="px-4 py-4"><p className="text-[12px] font-black text-slate-800">{cierre.ventasCantidad}</p><p className="mono mt-0.5 text-[10px] text-slate-400">{formatoMoneda(cierre.ventasBrutas, configuracion.simboloMoneda)}</p></td>
+                                        <td className="px-4 py-4 text-[12px] text-slate-500">{formatoMoneda(cierre.efectivoContado, configuracion.simboloMoneda)}</td>
+                                        <td className="px-4 py-4 text-[12px] text-slate-500">{formatoMoneda(cierre.tarjetaReportada, configuracion.simboloMoneda)}</td>
+                                        <td className="px-4 py-4 text-[12px] text-slate-500">{formatoMoneda(cierre.transferenciaReportada, configuracion.simboloMoneda)}</td>
+                                        <td className={`px-4 py-4 text-[12px] font-black ${colorDiferencia(diferencia)}`}>{formatoMoneda(diferencia, configuracion.simboloMoneda)}</td>
+                                        <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${cierre.estado === "Cuadrado" ? "bg-emerald-50 text-emerald-700" : cierre.estado === "Anulado" ? "bg-slate-100 text-slate-500" : "bg-amber-50 text-amber-700"}`}>{cierre.estado}</span></td>
                                         <td className="px-4 py-4">
                                             <div className="flex flex-wrap gap-2">
-                                                <button
-                                                    onClick={() => imprimirCierre(cierre)}
-                                                    className="flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700 hover:bg-blue-100"
-                                                >
-                                                    <Printer className="h-3.5 w-3.5" />
-                                                    Imprimir
-                                                </button>
-
-                                                <button
-                                                    onClick={() => eliminarCierre(cierre)}
-                                                    className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100"
-                                                >
-                                                    <Trash2 className="h-3.5 w-3.5" />
-                                                    Eliminar
-                                                </button>
+                                                <button onClick={() => imprimirCierre(cierre)} className="flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700 hover:bg-blue-100"><Printer className="h-3.5 w-3.5" />Imprimir</button>
+                                                {cierre.estado !== "Anulado" && <button onClick={() => eliminarCierre(cierre)} disabled={guardando} className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100 disabled:opacity-60"><Trash2 className="h-3.5 w-3.5" />Anular</button>}
                                             </div>
                                         </td>
                                     </tr>
                                 );
                             })}
-
-                            {cierresFiltrados.length === 0 && (
-                                <tr>
-                                    <td
-                                        colSpan={9}
-                                        className="px-6 py-10 text-center text-[12px] text-slate-400"
-                                    >
-                                        No hay cierres registrados o no coinciden con la búsqueda.
-                                    </td>
-                                </tr>
-                            )}
+                            {cierresFiltrados.length === 0 && <tr><td colSpan={9} className="px-6 py-10 text-center text-[12px] text-slate-400">{cargando ? "Cargando cierres..." : "No hay cierres registrados o no coinciden con la búsqueda."}</td></tr>}
                         </tbody>
                     </table>
                 </div>
             </section>
 
             <section className="hidden print:block bg-white p-8 text-slate-900">
-                <h1 className="text-2xl font-black">
-                    Cierre de caja - {fechaSeleccionada}
-                </h1>
-                <p className="mt-1 text-sm">
-                    {configuracion.nombreClinica} · Generado por{" "}
-                    {usuario?.nombre || "Usuario no identificado"}
-                </p>
-
+                <h1 className="text-2xl font-black">Cierre de caja - {fechaSeleccionada}</h1>
+                <p className="mt-1 text-sm">{configuracion.nombreClinica} · Generado por {usuario?.nombre || "Usuario no identificado"}</p>
                 <div className="mt-8 grid grid-cols-2 gap-4">
                     <div>
                         <p>Ventas activas: {ventasDia.length}</p>
-                        <p>
-                            Ventas brutas:{" "}
-                            {formatoMoneda(ventasBrutas, configuracion.simboloMoneda)}
-                        </p>
-                        <p>
-                            Efectivo sistema:{" "}
-                            {formatoMoneda(efectivoSistema, configuracion.simboloMoneda)}
-                        </p>
-                        <p>
-                            Tarjeta sistema:{" "}
-                            {formatoMoneda(tarjetaSistema, configuracion.simboloMoneda)}
-                        </p>
-                        <p>
-                            Transferencia sistema:{" "}
-                            {formatoMoneda(transferenciaSistema, configuracion.simboloMoneda)}
-                        </p>
+                        <p>Ventas brutas: {formatoMoneda(ventasBrutas, configuracion.simboloMoneda)}</p>
+                        <p>Efectivo sistema: {formatoMoneda(efectivoSistema, configuracion.simboloMoneda)}</p>
+                        <p>Tarjeta sistema: {formatoMoneda(tarjetaSistema, configuracion.simboloMoneda)}</p>
+                        <p>Transferencia sistema: {formatoMoneda(transferenciaSistema, configuracion.simboloMoneda)}</p>
                     </div>
-
                     <div>
-                        <p>
-                            Gastos total:{" "}
-                            {formatoMoneda(gastosTotal, configuracion.simboloMoneda)}
-                        </p>
-                        <p>
-                            Crédito generado:{" "}
-                            {formatoMoneda(creditoGenerado, configuracion.simboloMoneda)}
-                        </p>
-                        <p>
-                            Comisión POS:{" "}
-                            {formatoMoneda(comisionPOS, configuracion.simboloMoneda)}
-                        </p>
-                        <p>
-                            Neto tarjeta:{" "}
-                            {formatoMoneda(netoTarjeta, configuracion.simboloMoneda)}
-                        </p>
+                        <p>Gastos total: {formatoMoneda(gastosTotal, configuracion.simboloMoneda)}</p>
+                        <p>Crédito generado: {formatoMoneda(creditoGenerado, configuracion.simboloMoneda)}</p>
+                        <p>Comisión POS: {formatoMoneda(comisionPOS, configuracion.simboloMoneda)}</p>
+                        <p>Neto tarjeta: {formatoMoneda(netoTarjeta, configuracion.simboloMoneda)}</p>
                     </div>
                 </div>
-
                 <div className="mt-8 border-t pt-6">
-                    <p>
-                        Efectivo esperado:{" "}
-                        {formatoMoneda(efectivoEsperado, configuracion.simboloMoneda)}
-                    </p>
-                    <p>
-                        Efectivo contado:{" "}
-                        {formatoMoneda(
-                            cierreExistente?.efectivoContado || efectivoContado,
-                            configuracion.simboloMoneda
-                        )}
-                    </p>
-                    <p>
-                        Diferencia efectivo:{" "}
-                        {formatoMoneda(
-                            cierreExistente?.diferenciaEfectivo || diferenciaEfectivo,
-                            configuracion.simboloMoneda
-                        )}
-                    </p>
+                    <p>Efectivo esperado: {formatoMoneda(efectivoEsperado, configuracion.simboloMoneda)}</p>
+                    <p>Efectivo contado: {formatoMoneda(cierreExistente?.efectivoContado || efectivoContado, configuracion.simboloMoneda)}</p>
+                    <p>Diferencia efectivo: {formatoMoneda(cierreExistente?.diferenciaEfectivo || diferenciaEfectivo, configuracion.simboloMoneda)}</p>
                 </div>
             </section>
         </AppShell>
+    );
+}
+
+function ResumenItem({ titulo, valor, color, simbolo }: { titulo: string; valor: number; color: "emerald" | "red" | "blue" | "slate" | "indigo" | "amber"; simbolo: string }) {
+    const clases = {
+        emerald: "bg-emerald-50 text-emerald-700",
+        red: "bg-red-50 text-red-700",
+        blue: "bg-blue-50 text-blue-700",
+        slate: "bg-slate-50 text-slate-800",
+        indigo: "bg-indigo-50 text-indigo-700",
+        amber: "bg-amber-50 text-amber-700",
+    }[color];
+
+    return (
+        <div className={`rounded-2xl p-4 ${clases}`}>
+            <p className="text-[11px] font-bold opacity-80">{titulo}</p>
+            <p className="mt-1 text-sm font-black">{formatoMoneda(valor, simbolo)}</p>
+        </div>
+    );
+}
+
+function ListaSimple({ titulo, children }: { titulo: string; vacio: string; icono: string; children: React.ReactNode }) {
+    return (
+        <div className="glass-card overflow-hidden rounded-2xl">
+            <div className="border-b border-black/[0.04] px-6 py-4">
+                <h3 className="text-[16px] font-bold text-slate-800">{titulo}</h3>
+            </div>
+            <div className="max-h-[420px] overflow-y-auto p-4">
+                <div className="space-y-3">{children}</div>
+            </div>
+        </div>
+    );
+}
+
+function Vacio({ texto }: { texto: string }) {
+    return (
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-8 text-center">
+            <FileText className="mx-auto h-8 w-8 text-slate-300" />
+            <p className="mt-3 text-xs font-medium text-slate-400">{texto}</p>
+        </div>
     );
 }

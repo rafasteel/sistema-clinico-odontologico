@@ -3,12 +3,20 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ClipboardList, FileText, Printer } from "lucide-react";
+import {
+    ArrowLeft,
+    ClipboardList,
+    FileText,
+    Printer,
+    RefreshCcw,
+} from "lucide-react";
 import {
     ConfiguracionClinica,
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import { crearClienteSupabase } from "@/lib/supabase/client";
 
 type Paciente = {
     id: string;
@@ -69,9 +77,7 @@ type NotaClinica = {
     estado: "Activa" | "Anulada";
 };
 
-const PACIENTES_KEY = "pacientes_sistema_clinico";
-const CITAS_KEY = "citas_sistema_clinico";
-const NOTAS_KEY = "notas_clinicas_sistema_clinico";
+type Registro = Record<string, unknown>;
 
 function fechaHoyLocal() {
     const fecha = new Date();
@@ -90,17 +96,99 @@ function horaActualLocal() {
     return `${hours}:${minutes}`;
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
+function texto(valor: unknown, respaldo = "") {
+    const convertido = String(valor ?? "").trim();
 
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
+    return convertido || respaldo;
+}
 
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
+function numero(valor: unknown) {
+    const convertido = Number(valor || 0);
+
+    if (Number.isNaN(convertido)) return 0;
+
+    return convertido;
+}
+
+function fechaSolo(valor: unknown) {
+    const convertido = texto(valor);
+
+    if (convertido.length >= 10) return convertido.slice(0, 10);
+
+    return "";
+}
+
+function horaSolo(valor: unknown) {
+    const convertido = texto(valor);
+
+    if (!convertido) return "";
+
+    if (convertido.includes("T")) return convertido.slice(11, 16);
+
+    return convertido.slice(0, 5);
+}
+
+function convertirPaciente(data: Registro): Paciente {
+    return {
+        id: texto(data.id),
+        nombre: texto(data.nombre),
+        telefono: texto(data.telefono || data.whatsapp),
+        cedula: texto(data.cedula),
+        fechaNacimiento: texto(data.fecha_nacimiento || data.fechaNacimiento),
+        direccion: texto(data.direccion),
+        alergias: texto(data.alergias),
+        enfermedades: texto(
+            data.enfermedades ||
+            data.enfermedades_sistemicas ||
+            data.enfermedadesSistemicas ||
+            data.antecedentes
+        ),
+        medicamentos: texto(
+            data.medicamentos ||
+            data.medicamentos_actuales ||
+            data.medicamentosActuales
+        ),
+        observaciones: texto(data.observaciones),
+        estado: texto(data.estado, "Activo") === "Inactivo" ? "Inactivo" : "Activo",
+        saldoPendiente: numero(data.saldo_pendiente || data.saldoPendiente),
+        ultimaCita: texto(data.ultima_cita || data.ultimaCita),
+    };
+}
+
+function convertirCita(data: Registro): Cita {
+    return {
+        id: texto(data.id),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        pacienteNombre: texto(data.paciente_nombre || data.pacienteNombre),
+        doctorId: texto(data.doctor_id || data.doctorId),
+        doctorNombre: texto(data.doctor_nombre || data.doctorNombre),
+        servicioId: texto(data.servicio_id || data.servicioId),
+        servicioNombre: texto(data.servicio_nombre || data.servicioNombre),
+        costo: numero(data.costo),
+        fecha: fechaSolo(data.fecha),
+        hora: horaSolo(data.hora || data.creado_en),
+        recurrencia: texto(data.recurrencia, "No repetir"),
+        estado: texto(data.estado, "Programada") as EstadoCita,
+        observaciones: texto(data.observaciones),
+        creadaEn: texto(data.creado_en || data.creadaEn),
+    };
+}
+
+function convertirNota(data: Registro): NotaClinica {
+    return {
+        id: texto(data.id),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        fecha: fechaSolo(data.fecha || data.creado_en),
+        hora: horaSolo(data.hora || data.creado_en),
+        doctor: texto(data.doctor || data.doctor_nombre || data.doctorNombre),
+        servicio: texto(data.servicio || data.servicio_nombre || data.servicioNombre),
+        diagnostico: texto(data.diagnostico),
+        procedimiento: texto(data.procedimiento),
+        observaciones: texto(data.observaciones),
+        proximaCita: texto(data.proxima_cita || data.proximaCita),
+        usuarioNombre: texto(data.usuario_nombre || data.usuarioNombre),
+        estado: texto(data.estado, "Activa") === "Anulada" ? "Anulada" : "Activa",
+    };
 }
 
 function fechaLegible(fecha: string) {
@@ -130,6 +218,52 @@ function calcularEdad(fechaNacimiento: string) {
     return `${edad} años`;
 }
 
+async function obtenerPacienteDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("pacientes")
+        .select("*")
+        .eq("id", pacienteId)
+        .maybeSingle();
+
+    if (error) throw new Error(error.message);
+
+    return data ? convertirPaciente(data as Registro) : null;
+}
+
+async function listarCitasPacienteDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("citas")
+        .select("*")
+        .eq("paciente_id", pacienteId)
+        .order("fecha", { ascending: false })
+        .order("hora", { ascending: false })
+        .limit(20);
+
+    if (error) throw new Error(error.message);
+
+    return (data || []).map((item) => convertirCita(item as Registro));
+}
+
+async function listarNotasPacienteDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("notas_clinicas")
+        .select("*")
+        .eq("paciente_id", pacienteId)
+        .order("fecha", { ascending: false })
+        .order("hora", { ascending: false })
+        .limit(20);
+
+    if (error) throw new Error(error.message);
+
+    return (data || []).map((item) => convertirNota(item as Registro));
+}
+
 export default function ConstanciaAtencionPage() {
     const params = useParams();
     const pacienteId = String(params.id || "");
@@ -139,6 +273,8 @@ export default function ConstanciaAtencionPage() {
     );
 
     const [paciente, setPaciente] = useState<Paciente | null>(null);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
 
     const [fechaAtencion, setFechaAtencion] = useState(fechaHoyLocal());
     const [horaAtencion, setHoraAtencion] = useState(horaActualLocal());
@@ -150,65 +286,97 @@ export default function ConstanciaAtencionPage() {
     const [reposo, setReposo] = useState("");
     const [observaciones, setObservaciones] = useState("");
 
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const [pacienteEncontrado, citasPaciente, notasPaciente] =
+                await Promise.all([
+                    obtenerPacienteDirecto(pacienteId),
+                    listarCitasPacienteDirecto(pacienteId),
+                    listarNotasPacienteDirecto(pacienteId),
+                ]);
+
+            const ultimaCita = citasPaciente[0];
+            const ultimaNota = notasPaciente.find(
+                (item) => item.estado !== "Anulada"
+            ) || notasPaciente[0];
+
+            setPaciente(pacienteEncontrado);
+
+            if (ultimaCita) {
+                setFechaAtencion(ultimaCita.fecha || fechaHoyLocal());
+                setHoraAtencion(ultimaCita.hora || horaActualLocal());
+                setDoctor(ultimaCita.doctorNombre || "");
+                setServicio(ultimaCita.servicioNombre || "Consulta odontológica");
+                setMotivo(
+                    `El paciente fue atendido por ${ultimaCita.servicioNombre || "consulta odontológica"
+                    }.`
+                );
+            }
+
+            if (ultimaNota) {
+                setFechaAtencion(ultimaNota.fecha || fechaHoyLocal());
+                setHoraAtencion(ultimaNota.hora || horaActualLocal());
+                setDoctor(ultimaNota.doctor || ultimaCita?.doctorNombre || "");
+                setServicio(
+                    ultimaNota.servicio ||
+                    ultimaCita?.servicioNombre ||
+                    "Consulta odontológica"
+                );
+                setMotivo(
+                    ultimaNota.procedimiento ||
+                    ultimaNota.diagnostico ||
+                    "El paciente fue atendido en esta clínica odontológica."
+                );
+                setObservaciones(ultimaNota.observaciones || "");
+            }
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar la constancia desde Supabase.";
+
+            setError(mensaje);
+            setPaciente(null);
+        } finally {
+            setCargando(false);
+        }
+    }
+
     useEffect(() => {
-        const config = obtenerConfiguracionClinica();
-        const pacientes = leerLocalStorage<Paciente[]>(PACIENTES_KEY, []);
-        const citas = leerLocalStorage<Cita[]>(CITAS_KEY, []);
-        const notas = leerLocalStorage<NotaClinica[]>(NOTAS_KEY, []);
-
-        const pacienteEncontrado =
-            pacientes.find((item) => item.id === pacienteId) || null;
-
-        const citasPaciente = citas
-            .filter(
-                (item) =>
-                    item.pacienteId === pacienteId ||
-                    item.pacienteNombre?.toLowerCase() ===
-                    (pacienteEncontrado?.nombre || "").toLowerCase()
-            )
-            .sort((a, b) =>
-                `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`)
-            );
-
-        const notasPaciente = notas
-            .filter((item) => item.pacienteId === pacienteId)
-            .sort((a, b) =>
-                `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`)
-            );
-
-        const ultimaCita = citasPaciente[0];
-        const ultimaNota = notasPaciente[0];
-
-        setConfiguracion(config);
-        setPaciente(pacienteEncontrado);
-
-        if (ultimaCita) {
-            setFechaAtencion(ultimaCita.fecha || fechaHoyLocal());
-            setHoraAtencion(ultimaCita.hora || horaActualLocal());
-            setDoctor(ultimaCita.doctorNombre || "");
-            setServicio(ultimaCita.servicioNombre || "Consulta odontológica");
-            setMotivo(
-                `El paciente fue atendido por ${ultimaCita.servicioNombre || "consulta odontológica"
-                }.`
-            );
-        }
-
-        if (ultimaNota) {
-            setFechaAtencion(ultimaNota.fecha || fechaHoyLocal());
-            setHoraAtencion(ultimaNota.hora || horaActualLocal());
-            setDoctor(ultimaNota.doctor || doctor);
-            setServicio(ultimaNota.servicio || servicio);
-            setMotivo(
-                ultimaNota.procedimiento ||
-                ultimaNota.diagnostico ||
-                "El paciente fue atendido en esta clínica odontológica."
-            );
-            setObservaciones(ultimaNota.observaciones || "");
-        }
+        cargarDatos();
     }, [pacienteId]);
 
     function imprimir() {
         window.print();
+    }
+
+    if (cargando) {
+        return (
+            <main className="min-h-screen bg-slate-100 p-6">
+                <section className="mx-auto max-w-3xl rounded-3xl bg-white p-10 text-center shadow-sm">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-teal-50 text-teal-700">
+                        <RefreshCcw className="h-8 w-8 animate-spin" />
+                    </div>
+
+                    <h1 className="mt-5 text-2xl font-black text-slate-900">
+                        Cargando constancia
+                    </h1>
+
+                    <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                        Consultando paciente, citas y notas clínicas desde Supabase.
+                    </p>
+                </section>
+            </main>
+        );
     }
 
     if (!paciente) {
@@ -224,16 +392,27 @@ export default function ConstanciaAtencionPage() {
                     </h1>
 
                     <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                        No encontramos el paciente solicitado para generar la constancia.
+                        {error || `No encontramos el paciente solicitado en Supabase. ID consultado: ${pacienteId}`}
                     </p>
 
-                    <Link
-                        href="/pacientes"
-                        className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        Volver a pacientes
-                    </Link>
+                    <div className="mt-6 flex flex-wrap justify-center gap-2">
+                        <Link
+                            href="/pacientes"
+                            className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                            Volver a pacientes
+                        </Link>
+
+                        <button
+                            type="button"
+                            onClick={cargarDatos}
+                            className="inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                        >
+                            <RefreshCcw className="h-4 w-4" />
+                            Reintentar
+                        </button>
+                    </div>
                 </section>
             </main>
         );
@@ -307,6 +486,15 @@ export default function ConstanciaAtencionPage() {
                 </Link>
 
                 <div className="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onClick={cargarDatos}
+                        className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                    >
+                        <RefreshCcw className="h-4 w-4" />
+                        Recargar
+                    </button>
+
                     <Link
                         href={`/expediente/${paciente.id}`}
                         className="flex items-center gap-2 rounded-xl bg-teal-50 px-4 py-3 text-[12px] font-bold text-teal-700 hover:bg-teal-100"
@@ -324,6 +512,15 @@ export default function ConstanciaAtencionPage() {
                         Imprimir / Guardar PDF
                     </button>
                 </div>
+            </section>
+
+            <section className="no-print mx-auto mb-4 max-w-4xl rounded-2xl border border-teal-100 bg-teal-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">
+                    Constancia conectada a Supabase
+                </p>
+                <p className="mt-1 text-xs font-semibold text-teal-700">
+                    Los datos del paciente, citas y notas clínicas se leen desde la base real de la clínica.
+                </p>
             </section>
 
             <section className="no-print mx-auto mb-4 max-w-4xl rounded-2xl bg-white p-5 shadow-sm">

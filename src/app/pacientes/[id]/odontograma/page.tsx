@@ -27,6 +27,21 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import { obtenerPacienteSupabase, type PacienteSupabase } from "@/lib/supabase/pacientes";
+import {
+    listarDoctoresSupabase,
+    listarServiciosSupabase,
+    type DoctorSupabase,
+    type ServicioSupabase,
+} from "@/lib/supabase/doctoresServicios";
+import { crearCitasSupabase } from "@/lib/supabase/citas";
+import { crearTratamientoSupabase } from "@/lib/supabase/perfilPaciente";
+import { crearPresupuestoSupabase } from "@/lib/supabase/presupuestos";
+import {
+    guardarOdontogramaSupabase,
+    obtenerOdontogramaSupabase,
+} from "@/lib/supabase/odontograma";
 
 type Paciente = {
     id: string;
@@ -100,54 +115,6 @@ type OdontogramaPaciente = {
     piezas: PiezaDental[];
     historial: HistorialOdontograma[];
 };
-type TratamientoPaciente = {
-    id: string;
-    pacienteId: string;
-    fecha: string;
-    nombre: string;
-    descripcion: string;
-    total: number;
-    abonado: number;
-    estado: "Planificado" | "En proceso" | "Completado" | "Suspendido";
-};
-
-type ItemPresupuestoOdontograma = {
-    id: string;
-    piezaCodigo: string;
-    piezaNumero: string;
-    cara: CaraDental;
-    estadoDental: EstadoDental;
-    nombre: string;
-    tratamiento: string;
-    descripcion: string;
-    cantidad: number;
-    precioUnitario: number;
-    precio: number;
-    subtotal: number;
-    total: number;
-    estado: "Pendiente";
-};
-
-type PresupuestoOdontograma = {
-    id: string;
-    pacienteId: string;
-    pacienteNombre: string;
-    fecha: string;
-    hora: string;
-    estado: "Pendiente" | "Aprobado" | "Rechazado" | "Convertido a venta";
-    subtotal: number;
-    descuento: number;
-    total: number;
-    observaciones: string;
-    origen: "Odontograma";
-    piezaCodigo: string;
-    cara: CaraDental;
-    estadoDental: EstadoDental;
-    usuarioNombre: string;
-    items: ItemPresupuestoOdontograma[];
-    tratamientos: ItemPresupuestoOdontograma[];
-};
-
 
 type EstadoCita =
     | "Programada"
@@ -159,23 +126,6 @@ type EstadoCita =
     | "Reagendada"
     | "Cancelada"
     | "No asistió";
-
-type CitaTratamientoOdontograma = {
-    id: string;
-    pacienteId: string;
-    pacienteNombre: string;
-    doctorId: string;
-    doctorNombre: string;
-    servicioId: string;
-    servicioNombre: string;
-    costo: number;
-    fecha: string;
-    hora: string;
-    recurrencia: string;
-    estado: EstadoCita;
-    observaciones: string;
-    creadaEn: string;
-};
 
 type DoctorAgenda = {
     id: string;
@@ -241,13 +191,6 @@ type OdontogramaLegacy = {
         usuarioNombre?: string;
     }[];
 };
-
-const CLAVE_ODONTOGRAMAS = "odontogramas_sistema_clinico";
-const CLAVE_TRATAMIENTOS = "tratamientos_sistema_clinico";
-const CLAVE_PRESUPUESTOS = "presupuestos_sistema_clinico";
-const CLAVE_CITAS = "citas_sistema_clinico";
-const CLAVE_DOCTORES = "doctores_sistema_clinico";
-const CLAVE_SERVICIOS = "servicios_sistema_clinico";
 
 const formularioCitaVacio: FormularioCitaTratamiento = {
     doctorId: "",
@@ -386,7 +329,6 @@ const FDI_PIEZAS: Omit<PiezaDental, "caras" | "nota" | "actualizadoEn">[] = [
     { codigo: "75", numeroLegacy: 52, nombre: "Segundo molar temporal inferior izquierdo", tipo: "Molar", arcada: "Inferior", cuadrante: "Inferior izquierdo", denticion: "Temporal" },
 ];
 
-
 const ESTADOS_DENTALES: {
     valor: EstadoDental;
     etiqueta: string;
@@ -506,22 +448,6 @@ function fechaHoraCompleta() {
     return `${fechaHoyLocal()} ${horaActualLocal()}`;
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
-function guardarLocalStorage<T>(clave: string, valor: T) {
-    localStorage.setItem(clave, JSON.stringify(valor));
-}
 function numeroSeguro(valor: string) {
     const convertido = Number(valor || 0);
 
@@ -663,31 +589,47 @@ function normalizarOdontograma(
     };
 }
 
-function obtenerOdontogramasGuardados(): OdontogramaPaciente[] {
-    const datos = leerLocalStorage<unknown>(CLAVE_ODONTOGRAMAS, []);
-
-    if (Array.isArray(datos)) {
-        return datos.map((item) => {
-            const odontograma = item as OdontogramaLegacy;
-            return normalizarOdontograma(odontograma.pacienteId || "", odontograma);
-        });
-    }
-
-    if (datos && typeof datos === "object") {
-        return Object.entries(datos as Record<string, OdontogramaLegacy>).map(
-            ([pacienteId, odontograma]) =>
-                normalizarOdontograma(odontograma.pacienteId || pacienteId, odontograma)
-        );
-    }
-
-    return [];
+function convertirPacienteSupabase(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "",
+        enfermedades:
+            paciente.enfermedades_sistemicas || paciente.antecedentes || "",
+        medicamentos: paciente.medicamentos_actuales || "",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
 }
 
-function curvaturaIndice(index: number, arcada: "Superior" | "Inferior") {
-    const distanciaCentro = Math.abs(index - 7.5);
-    const curva = Math.round(distanciaCentro * 4);
+function convertirDoctorSupabase(doctor: DoctorSupabase): DoctorAgenda {
+    return {
+        id: doctor.id,
+        nombre: doctor.nombre || "",
+        especialidad: doctor.especialidad || "",
+        telefono: doctor.telefono || "",
+        correo: doctor.correo || "",
+        horario: doctor.observaciones || "",
+        estado: doctor.estado || "Activo",
+    };
+}
 
-    return arcada === "Superior" ? curva : -curva;
+function convertirServicioSupabase(servicio: ServicioSupabase): ServicioAgenda {
+    return {
+        id: servicio.id,
+        nombre: servicio.nombre || "",
+        categoria: servicio.categoria || "",
+        duracionMinutos: Number(servicio.duracion_minutos || 30),
+        precio: Number(servicio.precio || 0),
+        descripcion: servicio.descripcion || "",
+        estado: servicio.estado || "Activo",
+    };
 }
 
 export default function OdontogramaPage() {
@@ -721,39 +663,65 @@ export default function OdontogramaPage() {
         useState<TratamientoPendienteAgenda | null>(null);
     const [formularioCita, setFormularioCita] =
         useState<FormularioCitaTratamiento>(formularioCitaVacio);
+    const [cargando, setCargando] = useState(true);
+    const [guardando, setGuardando] = useState(false);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+            if (usuarioGuardado) {
+                setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
+            }
+
+            const [pacienteSupabase, doctoresSupabase, serviciosSupabase] =
+                await Promise.all([
+                    obtenerPacienteSupabase(pacienteId),
+                    listarDoctoresSupabase(),
+                    listarServiciosSupabase(),
+                ]);
+
+            setPaciente(
+                pacienteSupabase ? convertirPacienteSupabase(pacienteSupabase) : null
+            );
+            setDoctores(doctoresSupabase.map(convertirDoctorSupabase));
+            setServicios(serviciosSupabase.map(convertirServicioSupabase));
+
+            const odontogramaSupabase = await obtenerOdontogramaSupabase(pacienteId);
+            const odontogramaBase =
+                odontogramaSupabase && odontogramaSupabase.piezas.length > 0
+                    ? normalizarOdontograma(pacienteId, odontogramaSupabase as OdontogramaLegacy)
+                    : crearOdontogramaBase(pacienteId);
+
+            setOdontograma(odontogramaBase);
+            setDenticionActiva("Permanente");
+            setPiezaSeleccionada(
+                odontogramaBase.piezas.find((pieza) => pieza.codigo === "11")?.codigo ||
+                "11"
+            );
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el odontograma desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        setConfiguracion(obtenerConfiguracionClinica());
-        setUsuario(
-            leerLocalStorage<UsuarioSistema | null>("usuario_sistema_clinico", null)
-        );
-
-        setDoctores(leerLocalStorage<DoctorAgenda[]>(CLAVE_DOCTORES, []));
-        setServicios(leerLocalStorage<ServicioAgenda[]>(CLAVE_SERVICIOS, []));
-
-        const pacientesGuardados = leerLocalStorage<Paciente[]>(
-            "pacientes_sistema_clinico",
-            []
-        );
-
-        const pacienteEncontrado =
-            pacientesGuardados.find((item) => item.id === pacienteId) || null;
-
-        setPaciente(pacienteEncontrado);
-
-        const listaOdontogramas = obtenerOdontogramasGuardados();
-        const odontogramaEncontrado =
-            listaOdontogramas.find((item) => item.pacienteId === pacienteId) || null;
-
-        const odontogramaBase =
-            odontogramaEncontrado || crearOdontogramaBase(pacienteId);
-
-        setOdontograma(odontogramaBase);
-        setDenticionActiva("Permanente");
-        setPiezaSeleccionada(
-            odontogramaBase.piezas.find((pieza) => pieza.codigo === "11")?.codigo ||
-            "11"
-        );
+        cargarDatos();
     }, [pacienteId]);
 
     useEffect(() => {
@@ -886,7 +854,7 @@ export default function OdontogramaPage() {
         setModalCitaAbierto(true);
     }
 
-    function guardarCitaDesdeTratamiento(event: FormEvent<HTMLFormElement>) {
+    async function guardarCitaDesdeTratamiento(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
         if (!paciente || !tratamientoPendienteAgenda) return;
@@ -916,33 +884,45 @@ export default function OdontogramaPage() {
         const doctorSeleccionado = doctoresActivos.find(
             (doctor) => doctor.id === formularioCita.doctorId
         );
-
-        const citasGuardadas = leerLocalStorage<CitaTratamientoOdontograma[]>(
-            CLAVE_CITAS,
-            []
+        const servicioSeleccionado = serviciosActivos.find(
+            (servicio) => servicio.id === formularioCita.servicioId
         );
 
-        const nuevaCita: CitaTratamientoOdontograma = {
-            id: `CITA-${Date.now()}`,
-            pacienteId: paciente.id,
-            pacienteNombre: paciente.nombre,
-            doctorId: doctorSeleccionado?.id || "",
-            doctorNombre: doctorSeleccionado?.nombre || "Doctor por asignar",
-            servicioId: formularioCita.servicioId,
-            servicioNombre: formularioCita.servicioNombre.trim(),
-            costo,
-            fecha: formularioCita.fecha,
-            hora: formularioCita.hora,
-            recurrencia: "No repetir",
-            estado: "Programada",
-            observaciones: formularioCita.observaciones.trim(),
-            creadaEn: fechaHoraCompleta(),
-        };
+        setGuardando(true);
+        setError("");
 
-        guardarLocalStorage(CLAVE_CITAS, [nuevaCita, ...citasGuardadas]);
+        try {
+            await crearCitasSupabase({
+                paciente_id: paciente.id,
+                doctor_id: doctorSeleccionado?.id || null,
+                servicio_id: servicioSeleccionado?.id || null,
+                paciente_nombre: paciente.nombre,
+                doctor_nombre: doctorSeleccionado?.nombre || "Doctor por asignar",
+                servicio_nombre: formularioCita.servicioNombre.trim(),
+                fecha: formularioCita.fecha,
+                hora: formularioCita.hora,
+                duracion_minutos: servicioSeleccionado?.duracionMinutos || 30,
+                costo,
+                estado: "Programada",
+                observaciones: formularioCita.observaciones.trim(),
+                recurrencia: "No repetir",
+                tratamiento_id: tratamientoPendienteAgenda.tratamientoId,
+                presupuesto_id: tratamientoPendienteAgenda.presupuestoId,
+            });
 
-        cerrarModalCita();
-        alert("Cita creada y conectada con el tratamiento correctamente.");
+            cerrarModalCita();
+            alert("Cita creada y conectada con el tratamiento correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo crear la cita desde odontograma.";
+
+            setError(mensaje);
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
     function cambiarDenticion(nuevaDenticion: Denticion) {
@@ -967,22 +947,18 @@ export default function OdontogramaPage() {
     }
 
     function guardarOdontogramaActual(nuevoOdontograma: OdontogramaPaciente) {
-        const lista = obtenerOdontogramasGuardados().filter(
-            (item) => item.pacienteId
-        );
-
-        const indice = lista.findIndex(
-            (item) => item.pacienteId === nuevoOdontograma.pacienteId
-        );
-
-        if (indice >= 0) {
-            lista[indice] = nuevoOdontograma;
-        } else {
-            lista.push(nuevoOdontograma);
-        }
-
-        guardarLocalStorage(CLAVE_ODONTOGRAMAS, lista);
         setOdontograma(nuevoOdontograma);
+        setError("");
+
+        guardarOdontogramaSupabase(nuevoOdontograma).catch((errorActual) => {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo guardar el odontograma en Supabase.";
+
+            setError(mensaje);
+            alert(mensaje);
+        });
     }
 
     function seleccionarPieza(codigo: string) {
@@ -1169,7 +1145,7 @@ export default function OdontogramaPage() {
         setEstadoSeleccionado("Sano");
         setNotaEdicion("");
     }
-    function crearTratamientoDesdePieza() {
+    async function crearTratamientoDesdePieza() {
         if (!paciente || !piezaActiva) return;
 
         if (!procedimientoNombre.trim()) {
@@ -1184,96 +1160,73 @@ export default function OdontogramaPage() {
             return;
         }
 
-        const tratamientosGuardados = leerLocalStorage<TratamientoPaciente[]>(
-            CLAVE_TRATAMIENTOS,
-            []
-        );
-
-        const presupuestosGuardados = leerLocalStorage<PresupuestoOdontograma[]>(
-            CLAVE_PRESUPUESTOS,
-            []
-        );
-
-        const tratamientoId = `TRAT-${Date.now()}`;
-        const presupuestoId = `PRES-${Date.now() + 1}`;
-
         const descripcionTratamiento =
             procedimientoDescripcion.trim() ||
             `Tratamiento generado desde odontograma. Pieza ${piezaActiva.codigo}, cara ${CARAS_LABELS[caraSeleccionada]}, estado ${estadoSeleccionado}.`;
 
-        const nuevoTratamiento: TratamientoPaciente = {
-            id: tratamientoId,
-            pacienteId: paciente.id,
-            fecha: fechaHoyLocal(),
-            nombre: `${procedimientoNombre.trim()} · Pieza ${piezaActiva.codigo}`,
-            descripcion: descripcionTratamiento,
-            total,
-            abonado: 0,
-            estado: "Planificado",
-        };
+        setGuardando(true);
+        setError("");
 
-        const item: ItemPresupuestoOdontograma = {
-            id: `ITEM-${Date.now()}`,
-            piezaCodigo: piezaActiva.codigo,
-            piezaNumero: piezaActiva.codigo,
-            cara: caraSeleccionada,
-            estadoDental: estadoSeleccionado,
-            nombre: procedimientoNombre.trim(),
-            tratamiento: procedimientoNombre.trim(),
-            descripcion:
-                procedimientoDescripcion.trim() ||
-                `Procedimiento sugerido desde odontograma para pieza ${piezaActiva.codigo}.`,
-            cantidad: 1,
-            precioUnitario: total,
-            precio: total,
-            subtotal: total,
-            total,
-            estado: "Pendiente",
-        };
+        try {
+            const tratamiento = await crearTratamientoSupabase({
+                paciente_id: paciente.id,
+                nombre: `${procedimientoNombre.trim()} · Pieza ${piezaActiva.codigo}`,
+                descripcion: descripcionTratamiento,
+                total,
+                abonado: 0,
+                estado: "Planificado",
+            });
 
-        const nuevoPresupuesto: PresupuestoOdontograma = {
-            id: presupuestoId,
-            pacienteId: paciente.id,
-            pacienteNombre: paciente.nombre,
-            fecha: fechaHoyLocal(),
-            hora: horaActualLocal(),
-            estado: "Pendiente",
-            subtotal: total,
-            descuento: 0,
-            total,
-            observaciones: `Presupuesto generado automáticamente al crear tratamiento desde odontograma. Tratamiento ${tratamientoId}. Pieza ${piezaActiva.codigo}, cara ${CARAS_LABELS[caraSeleccionada]}, estado dental ${estadoSeleccionado}.`,
-            origen: "Odontograma",
-            piezaCodigo: piezaActiva.codigo,
-            cara: caraSeleccionada,
-            estadoDental: estadoSeleccionado,
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            items: [item],
-            tratamientos: [item],
-        };
+            const presupuesto = await crearPresupuestoSupabase({
+                paciente_id: paciente.id,
+                descuento: 0,
+                observaciones: `Presupuesto generado automáticamente al crear tratamiento desde odontograma. Tratamiento ${tratamiento.id}. Pieza ${piezaActiva.codigo}, cara ${CARAS_LABELS[caraSeleccionada]}, estado dental ${estadoSeleccionado}.`,
+                origen: "Odontograma",
+                pieza_codigo: piezaActiva.codigo,
+                cara: caraSeleccionada,
+                estado_dental: estadoSeleccionado,
+                items: [
+                    {
+                        pieza_codigo: piezaActiva.codigo,
+                        pieza_numero: piezaActiva.codigo,
+                        cara: caraSeleccionada,
+                        estado_dental: estadoSeleccionado,
+                        nombre: procedimientoNombre.trim(),
+                        tratamiento: procedimientoNombre.trim(),
+                        descripcion:
+                            procedimientoDescripcion.trim() ||
+                            `Procedimiento sugerido desde odontograma para pieza ${piezaActiva.codigo}.`,
+                        cantidad: 1,
+                        precio_unitario: total,
+                        estado: "Pendiente",
+                    },
+                ],
+            });
 
-        guardarLocalStorage(CLAVE_TRATAMIENTOS, [
-            nuevoTratamiento,
-            ...tratamientosGuardados,
-        ]);
+            abrirModalCitaDesdeTratamiento({
+                tratamientoId: tratamiento.id,
+                presupuestoId: presupuesto?.id || "",
+                nombreTratamiento: procedimientoNombre.trim(),
+                descripcion: descripcionTratamiento,
+                total,
+                piezaCodigo: piezaActiva.codigo,
+                cara: caraSeleccionada,
+                estadoDental: estadoSeleccionado,
+            });
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo crear tratamiento y presupuesto desde odontograma.";
 
-        guardarLocalStorage(CLAVE_PRESUPUESTOS, [
-            nuevoPresupuesto,
-            ...presupuestosGuardados,
-        ]);
-
-        abrirModalCitaDesdeTratamiento({
-            tratamientoId,
-            presupuestoId,
-            nombreTratamiento: procedimientoNombre.trim(),
-            descripcion: descripcionTratamiento,
-            total,
-            piezaCodigo: piezaActiva.codigo,
-            cara: caraSeleccionada,
-            estadoDental: estadoSeleccionado,
-        });
+            setError(mensaje);
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
 
-    function crearPresupuestoDesdePieza() {
+    async function crearPresupuestoDesdePieza() {
         if (!paciente || !piezaActiva) return;
 
         if (!procedimientoNombre.trim()) {
@@ -1288,57 +1241,50 @@ export default function OdontogramaPage() {
             return;
         }
 
-        const presupuestosGuardados = leerLocalStorage<PresupuestoOdontograma[]>(
-            CLAVE_PRESUPUESTOS,
-            []
-        );
+        setGuardando(true);
+        setError("");
 
-        const item: ItemPresupuestoOdontograma = {
-            id: `ITEM-${Date.now()}`,
-            piezaCodigo: piezaActiva.codigo,
-            piezaNumero: piezaActiva.codigo,
-            cara: caraSeleccionada,
-            estadoDental: estadoSeleccionado,
-            nombre: procedimientoNombre.trim(),
-            tratamiento: procedimientoNombre.trim(),
-            descripcion:
-                procedimientoDescripcion.trim() ||
-                `Procedimiento sugerido desde odontograma para pieza ${piezaActiva.codigo}.`,
-            cantidad: 1,
-            precioUnitario: total,
-            precio: total,
-            subtotal: total,
-            total,
-            estado: "Pendiente",
-        };
+        try {
+            await crearPresupuestoSupabase({
+                paciente_id: paciente.id,
+                descuento: 0,
+                observaciones: `Presupuesto generado desde odontograma. Pieza ${piezaActiva.codigo}, cara ${CARAS_LABELS[caraSeleccionada]}, estado dental ${estadoSeleccionado}.`,
+                origen: "Odontograma",
+                pieza_codigo: piezaActiva.codigo,
+                cara: caraSeleccionada,
+                estado_dental: estadoSeleccionado,
+                items: [
+                    {
+                        pieza_codigo: piezaActiva.codigo,
+                        pieza_numero: piezaActiva.codigo,
+                        cara: caraSeleccionada,
+                        estado_dental: estadoSeleccionado,
+                        nombre: procedimientoNombre.trim(),
+                        tratamiento: procedimientoNombre.trim(),
+                        descripcion:
+                            procedimientoDescripcion.trim() ||
+                            `Procedimiento sugerido desde odontograma para pieza ${piezaActiva.codigo}.`,
+                        cantidad: 1,
+                        precio_unitario: total,
+                        estado: "Pendiente",
+                    },
+                ],
+            });
 
-        const nuevoPresupuesto: PresupuestoOdontograma = {
-            id: `PRES-${Date.now()}`,
-            pacienteId: paciente.id,
-            pacienteNombre: paciente.nombre,
-            fecha: fechaHoyLocal(),
-            hora: horaActualLocal(),
-            estado: "Pendiente",
-            subtotal: total,
-            descuento: 0,
-            total,
-            observaciones: `Presupuesto generado desde odontograma. Pieza ${piezaActiva.codigo}, cara ${CARAS_LABELS[caraSeleccionada]}, estado dental ${estadoSeleccionado}.`,
-            origen: "Odontograma",
-            piezaCodigo: piezaActiva.codigo,
-            cara: caraSeleccionada,
-            estadoDental: estadoSeleccionado,
-            usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            items: [item],
-            tratamientos: [item],
-        };
+            alert("Presupuesto creado desde odontograma correctamente en Supabase.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo crear el presupuesto desde odontograma.";
 
-        guardarLocalStorage(CLAVE_PRESUPUESTOS, [
-            nuevoPresupuesto,
-            ...presupuestosGuardados,
-        ]);
-
-        alert("Presupuesto creado desde odontograma correctamente.");
+            setError(mensaje);
+            alert(mensaje);
+        } finally {
+            setGuardando(false);
+        }
     }
+
     function renderCaraCuadrado(pieza: PiezaDental, cara: CaraDental, points: string) {
         const estado = pieza.caras[cara];
         const color = colorEstado(estado);
@@ -1478,6 +1424,43 @@ export default function OdontogramaPage() {
             descripcion="Mapa dental SVG interactivo, visual y profesional"
             moduloActivo="Pacientes"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo sincronizar odontograma
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Odontograma conectado a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Hallazgos, superficies e historial se guardan por paciente en la base de datos.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando || guardando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar"}
+                </button>
+            </section>
+
             <section className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <Link
                     href={`/pacientes/${paciente.id}`}
@@ -1880,7 +1863,8 @@ export default function OdontogramaPage() {
                                 <button
                                     type="button"
                                     onClick={aplicarEstadoEnCara}
-                                    className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90"
+                                    disabled={guardando}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <Save className="h-4 w-4" />
                                     Aplicar en cara seleccionada
@@ -1889,7 +1873,8 @@ export default function OdontogramaPage() {
                                 <button
                                     type="button"
                                     onClick={aplicarEstadoEnTodaLaPieza}
-                                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800"
+                                    disabled={guardando}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <CheckCircle2 className="h-4 w-4" />
                                     Aplicar a toda la pieza
@@ -1915,7 +1900,6 @@ export default function OdontogramaPage() {
                             </div>
                         </div>
                     </div>
-
 
                     <div className="glass-card overflow-hidden rounded-3xl">
                         <div className="border-b border-black/[0.04] px-6 py-5">
@@ -1991,19 +1975,21 @@ export default function OdontogramaPage() {
                                 <button
                                     type="button"
                                     onClick={crearTratamientoDesdePieza}
-                                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800"
+                                    disabled={guardando}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <Plus className="h-4 w-4" />
-                                    Crear tratamiento + presupuesto
+                                    {guardando ? "Guardando..." : "Crear tratamiento + presupuesto"}
                                 </button>
 
                                 <button
                                     type="button"
                                     onClick={crearPresupuestoDesdePieza}
-                                    className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90"
+                                    disabled={guardando}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <BadgeDollarSign className="h-4 w-4" />
-                                    Crear presupuesto
+                                    {guardando ? "Guardando..." : "Crear presupuesto"}
                                 </button>
                             </div>
                         </div>
