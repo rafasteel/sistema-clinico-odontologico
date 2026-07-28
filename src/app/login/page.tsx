@@ -32,14 +32,6 @@ import {
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
 
-function colorRol(rol: string) {
-    if (rol === "SUPER_ADMIN") return "bg-purple-50 text-purple-700 border border-purple-100";
-    if (rol === "ADMIN") return "bg-slate-900 text-white";
-    if (rol === "DOCTOR") return "bg-teal-50 text-teal-700 border border-teal-100";
-    if (rol === "RECEPCION") return "bg-indigo-50 text-indigo-700 border border-indigo-100";
-
-    return "bg-emerald-50 text-emerald-700 border border-emerald-100";
-}
 
 export default function LoginPage() {
     const router = useRouter();
@@ -79,7 +71,7 @@ export default function LoginPage() {
 
                 limpiarSesionLocal();
             } catch (errorRevision) {
-                console.error("Error revisando sesión Supabase:", errorRevision);
+                console.error("Error revisando sesión:", errorRevision);
                 limpiarSesionLocal();
             } finally {
                 window.clearTimeout(tiempoMaximo);
@@ -132,7 +124,7 @@ export default function LoginPage() {
                 limpiarSesionLocal();
                 setError(
                     errorPerfil ||
-                    "El usuario inició sesión, pero no tiene perfil registrado en usuarios_perfiles."
+                    "Tu usuario no tiene acceso configurado. Contactá al administrador."
                 );
                 return;
             }
@@ -147,10 +139,10 @@ export default function LoginPage() {
             guardarSesionLocal(perfil);
             router.push(perfil.rol === "SUPER_ADMIN" ? "/super-admin" : "/inicio");
         } catch (errorLoginGeneral) {
-            console.error("Error iniciando sesión Supabase:", errorLoginGeneral);
+            console.error("Error iniciando sesión:", errorLoginGeneral);
             limpiarSesionLocal();
             setError(
-                "No se pudo conectar con Supabase. Revisá NEXT_PUBLIC_SUPABASE_URL y NEXT_PUBLIC_SUPABASE_ANON_KEY en .env.local."
+                "No se pudo conectar con el sistema. Intentá nuevamente en unos segundos."
             );
         } finally {
             setCargando(false);
@@ -169,7 +161,7 @@ export default function LoginPage() {
                         Verificando sesión
                     </h1>
                     <p className="mt-1 text-sm font-medium text-slate-500">
-                        Validando acceso con Supabase Auth...
+                        Preparando el sistema en línea...
                     </p>
                 </div>
             </main>
@@ -250,9 +242,9 @@ export default function LoginPage() {
 
                                 <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-5 backdrop-blur">
                                     <ShieldCheck className="h-6 w-6 text-indigo-300" />
-                                    <h3 className="mt-4 font-bold">Seguridad real</h3>
+                                    <h3 className="mt-4 font-bold">Acceso protegido</h3>
                                     <p className="mt-2 text-sm leading-6 text-white/45">
-                                        Acceso con Supabase Auth, roles y multi-clínica.
+                                        Ingreso reservado para usuarios autorizados.
                                     </p>
                                 </div>
                             </div>
@@ -263,7 +255,7 @@ export default function LoginPage() {
                                         Estado del sistema
                                     </p>
                                     <p className="mt-1 text-sm font-semibold text-white">
-                                        Conectado a Supabase
+                                        Plataforma disponible
                                     </p>
                                 </div>
 
@@ -381,7 +373,7 @@ export default function LoginPage() {
                             <div className="mt-8">
                                 <div className="flex items-center justify-between">
                                     <p className="text-sm font-black text-slate-800">
-                                        Acceso configurado
+                                        Sistema en línea
                                     </p>
 
                                     <span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-bold text-slate-500">
@@ -398,16 +390,15 @@ export default function LoginPage() {
 
                                             <div className="min-w-0 flex-1">
                                                 <p className="text-sm font-black text-slate-800">
-                                                    Usuarios reales
+                                                    Usuarios autorizados
                                                 </p>
                                                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                                                    El acceso ahora se valida con Supabase Auth y la
-                                                    tabla usuarios_perfiles.
+                                                    El ingreso está reservado para personal autorizado de la clínica.
                                                 </p>
                                             </div>
 
-                                            <span className={`rounded-full px-3 py-1 text-[10px] font-black ${colorRol("SUPER_ADMIN")}`}>
-                                                SUPER_ADMIN
+                                            <span className="rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[10px] font-black text-emerald-700">
+                                                Online
                                             </span>
                                         </div>
                                     </div>
@@ -420,11 +411,10 @@ export default function LoginPage() {
 
                                             <div className="min-w-0 flex-1">
                                                 <p className="text-sm font-black text-slate-800">
-                                                    Redirección automática
+                                                    Acceso personalizado
                                                 </p>
                                                 <p className="mt-1 text-xs leading-5 text-slate-500">
-                                                    SUPER_ADMIN entra a /super-admin. Los usuarios de
-                                                    clínica entran a /inicio.
+                                                    Cada usuario entra automáticamente al área correspondiente según su rol.
                                                 </p>
                                             </div>
 
@@ -434,19 +424,16 @@ export default function LoginPage() {
                                 </div>
                             </div>
 
-                            <div className="mt-6 rounded-3xl border border-blue-100 bg-blue-50 p-4">
-                                <p className="text-xs font-semibold leading-5 text-blue-800">
-                                    Etapa Supabase: las contraseñas ya no se guardan en localStorage.
-                                    El sistema mantiene una sesión local temporal solo para que los
-                                    módulos actuales sigan funcionando mientras migramos todo a base
-                                    de datos.
+                            <div className="mt-6 rounded-3xl border border-emerald-100 bg-emerald-50 p-4">
+                                <p className="text-xs font-semibold leading-5 text-emerald-800">
+                                    Sistema en línea. Accedé únicamente con las credenciales asignadas por tu clínica.
                                 </p>
                             </div>
                         </div>
                     </div>
 
                     <p className="mt-5 text-center text-xs font-medium text-slate-400">
-                        © Sistema Clínico Odontológico · Diseño moderno para gestión clínica
+                        © Sistema Clínico Odontológico · Gestión clínica moderna y segura
                     </p>
                 </div>
             </section>
