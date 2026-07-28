@@ -15,7 +15,6 @@ import {
     Info,
     RefreshCcw,
     ShieldAlert,
-    Trash2,
     Upload,
 } from "lucide-react";
 import AppShell from "@/components/AppShell";
@@ -24,161 +23,17 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
-
-type UsuarioSistema = {
-    usuario: string;
-    nombre: string;
-    rol: string;
-};
-
-type ClaveRespaldo = {
-    clave: string;
-    nombre: string;
-    modulo: string;
-    descripcion: string;
-};
-
-type ItemRespaldo = {
-    clave: string;
-    nombre: string;
-    modulo: string;
-    descripcion: string;
-    raw: string | null;
-    datos: unknown;
-    registros: number;
-};
-
-type RespaldoSistema = {
-    tipo: "SISTEMA_CLINICO_RESPALDO";
-    version: string;
-    generadoEn: string;
-    generadoPor: string;
-    clinica: string;
-    items: ItemRespaldo[];
-};
-
-const ULTIMO_RESPALDO_KEY = "ultimo_respaldo_sistema_clinico";
-
-const clavesRespaldo: ClaveRespaldo[] = [
-    {
-        clave: "configuracion_clinica_sistema_clinico",
-        nombre: "Configuración de clínica",
-        modulo: "Configuración",
-        descripcion: "Datos generales, moneda, comisión POS y mensajes.",
-    },
-    {
-        clave: "usuarios_app_sistema_clinico",
-        nombre: "Usuarios del sistema",
-        modulo: "Administración",
-        descripcion: "Usuarios, roles y estados de acceso.",
-    },
-    {
-        clave: "pacientes_sistema_clinico",
-        nombre: "Pacientes",
-        modulo: "Pacientes",
-        descripcion: "Directorio clínico, alertas médicas y datos generales.",
-    },
-    {
-        clave: "doctores_sistema_clinico",
-        nombre: "Doctores",
-        modulo: "Doctores y Servicios",
-        descripcion: "Profesionales disponibles para agenda.",
-    },
-    {
-        clave: "servicios_sistema_clinico",
-        nombre: "Servicios",
-        modulo: "Doctores y Servicios",
-        descripcion: "Catálogo de tratamientos, duración y precios.",
-    },
-    {
-        clave: "citas_sistema_clinico",
-        nombre: "Agenda médica",
-        modulo: "Agenda",
-        descripcion: "Citas, estados, doctores, pacientes y servicios.",
-    },
-    {
-        clave: "odontogramas_sistema_clinico",
-        nombre: "Odontogramas",
-        modulo: "Odontograma",
-        descripcion: "Registros dentales por paciente.",
-    },
-    {
-        clave: "presupuestos_sistema_clinico",
-        nombre: "Presupuestos",
-        modulo: "Presupuestos",
-        descripcion: "Cotizaciones, tratamientos y presupuestos por paciente.",
-    },
-    {
-        clave: "ventas_sistema_clinico",
-        nombre: "Ventas",
-        modulo: "Caja",
-        descripcion: "Cobros, recibos, créditos, productos y abonos.",
-    },
-    {
-        clave: "cuentas_cobrar_sistema_clinico",
-        nombre: "Cuentas por cobrar",
-        modulo: "Caja",
-        descripcion: "Créditos pendientes de pacientes o clientes.",
-    },
-    {
-        clave: "gastos_sistema_clinico",
-        nombre: "Gastos",
-        modulo: "Control de Gastos",
-        descripcion: "Gastos activos, anulados y pagos a proveedores.",
-    },
-    {
-        clave: "productos_sistema_clinico",
-        nombre: "Inventario",
-        modulo: "Inventario",
-        descripcion: "Productos, stock, costos, precios y vencimientos.",
-    },
-    {
-        clave: "movimientos_inventario_sistema_clinico",
-        nombre: "Movimientos de inventario",
-        modulo: "Inventario",
-        descripcion: "Entradas, salidas, ajustes, pérdidas y uso clínico.",
-    },
-    {
-        clave: "proveedores_sistema_clinico",
-        nombre: "Proveedores",
-        modulo: "Proveedores",
-        descripcion: "Directorio comercial de proveedores.",
-    },
-    {
-        clave: "compras_proveedores_sistema_clinico",
-        nombre: "Compras a proveedores",
-        modulo: "Proveedores",
-        descripcion: "Compras, pagos, créditos y relación con inventario.",
-    },
-    {
-        clave: "cuentas_pagar_sistema_clinico",
-        nombre: "Cuentas por pagar",
-        modulo: "Proveedores",
-        descripcion: "Deudas pendientes con proveedores.",
-    },
-    {
-        clave: "cierres_caja_sistema_clinico",
-        nombre: "Cierres de caja",
-        modulo: "Cierre de Caja",
-        descripcion: "Cuadres diarios de caja.",
-    },
-    {
-        clave: ULTIMO_RESPALDO_KEY,
-        nombre: "Último respaldo",
-        modulo: "Respaldo",
-        descripcion: "Fecha del último respaldo generado o restaurado.",
-    },
-];
-
-function leerJSONSeguro(raw: string | null) {
-    if (!raw) return null;
-
-    try {
-        return JSON.parse(raw) as unknown;
-    } catch {
-        return raw;
-    }
-}
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    crearRespaldoSupabase,
+    nombreArchivoRespaldoSupabase,
+    registrarHistorialRespaldoSupabase,
+    tamanoBytesObjeto,
+    validarArchivoRespaldoSupabase,
+    type HistorialRespaldoSupabase,
+    type ItemRespaldoSupabase,
+    type RespaldoSistemaSupabase,
+} from "@/lib/supabase/respaldo";
 
 function contarRegistros(datos: unknown) {
     if (Array.isArray(datos)) return datos.length;
@@ -200,7 +55,7 @@ function formatoBytes(bytes: number) {
     return `${(kb / 1024).toFixed(2)} MB`;
 }
 
-function fechaLegible(valor: string | null) {
+function fechaLegible(valor: string | null | undefined) {
     if (!valor) return "Nunca";
 
     try {
@@ -232,55 +87,57 @@ function descargarArchivo(nombre: string, contenido: string) {
     URL.revokeObjectURL(url);
 }
 
-function nombreArchivoFecha() {
-    const fecha = new Date();
-    const year = fecha.getFullYear();
-    const month = String(fecha.getMonth() + 1).padStart(2, "0");
-    const day = String(fecha.getDate()).padStart(2, "0");
-    const hour = String(fecha.getHours()).padStart(2, "0");
-    const minute = String(fecha.getMinutes()).padStart(2, "0");
-
-    return `${year}-${month}-${day}-${hour}${minute}`;
-}
-
 export default function RespaldoPage() {
     const inputArchivoRef = useRef<HTMLInputElement | null>(null);
 
-    const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
         CONFIGURACION_PREDETERMINADA
     );
 
-    const [items, setItems] = useState<ItemRespaldo[]>([]);
-    const [ultimoRespaldo, setUltimoRespaldo] = useState<string | null>(null);
+    const [items, setItems] = useState<ItemRespaldoSupabase[]>([]);
+    const [historial, setHistorial] = useState<HistorialRespaldoSupabase[]>([]);
+    const [erroresLectura, setErroresLectura] = useState<string[]>([]);
     const [archivoNombre, setArchivoNombre] = useState("");
     const [respaldoImportado, setRespaldoImportado] =
-        useState<RespaldoSistema | null>(null);
+        useState<RespaldoSistemaSupabase | null>(null);
 
-    function cargarEstado() {
-        const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
-        const ultimo = localStorage.getItem(ULTIMO_RESPALDO_KEY);
+    const [cargando, setCargando] = useState(true);
+    const [generando, setGenerando] = useState(false);
+    const [error, setError] = useState("");
 
-        if (usuarioGuardado) {
-            setUsuario(leerJSONSeguro(usuarioGuardado) as UsuarioSistema);
+    async function cargarEstado() {
+        setCargando(true);
+        setError("");
+
+        try {
+            let config = CONFIGURACION_PREDETERMINADA;
+
+            try {
+                config = await obtenerConfiguracionClinicaSupabase();
+            } catch {
+                config = obtenerConfiguracionClinica();
+            }
+
+            setConfiguracion(config);
+
+            const resultado = await crearRespaldoSupabase(config.nombreClinica);
+
+            setItems(resultado.respaldo.items);
+            setHistorial(resultado.historial);
+            setErroresLectura(resultado.errores);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el estado de respaldo desde Supabase.";
+
+            setError(mensaje);
+            setItems([]);
+            setHistorial([]);
+            setErroresLectura([]);
+        } finally {
+            setCargando(false);
         }
-
-        setConfiguracion(obtenerConfiguracionClinica());
-        setUltimoRespaldo(ultimo);
-
-        const nuevosItems = clavesRespaldo.map((item) => {
-            const raw = localStorage.getItem(item.clave);
-            const datos = leerJSONSeguro(raw);
-
-            return {
-                ...item,
-                raw,
-                datos,
-                registros: contarRegistros(datos),
-            };
-        });
-
-        setItems(nuevosItems);
     }
 
     useEffect(() => {
@@ -295,58 +152,68 @@ export default function RespaldoPage() {
     const modulosConDatos = items.filter((item) => item.registros > 0).length;
 
     const tamanoEstimado = useMemo(() => {
-        return items.reduce((total, item) => {
-            return total + (item.raw ? new Blob([item.raw]).size : 0);
-        }, 0);
+        return tamanoBytesObjeto({
+            tipo: "SISTEMA_CLINICO_RESPALDO_SUPABASE",
+            items,
+        });
     }, [items]);
 
     const itemsConDatos = items.filter((item) => item.registros > 0);
 
     const itemsSinDatos = items.filter((item) => item.registros === 0);
 
+    const ultimoRespaldo = historial[0]?.creado_en || null;
+
     const registrosImportados =
         respaldoImportado?.items.reduce(
-            (total, item) => total + (item.registros || 0),
+            (total, item) => total + contarRegistros(item.datos),
             0
         ) || 0;
 
-    function crearObjetoRespaldo(): RespaldoSistema {
-        const itemsRespaldo = clavesRespaldo.map((item) => {
-            const raw = localStorage.getItem(item.clave);
-            const datos = leerJSONSeguro(raw);
+    async function generarRespaldo() {
+        setGenerando(true);
+        setError("");
 
-            return {
-                ...item,
-                raw,
-                datos,
-                registros: contarRegistros(datos),
-            };
-        });
+        try {
+            const resultado = await crearRespaldoSupabase(
+                configuracion.nombreClinica
+            );
+            const nombre = nombreArchivoRespaldoSupabase();
+            const contenido = JSON.stringify(resultado.respaldo, null, 2);
+            const tamano = new Blob([contenido]).size;
 
-        return {
-            tipo: "SISTEMA_CLINICO_RESPALDO",
-            version: "1.0",
-            generadoEn: new Date().toISOString(),
-            generadoPor: usuario?.nombre || "Usuario no identificado",
-            clinica: configuracion.nombreClinica,
-            items: itemsRespaldo,
-        };
-    }
+            descargarArchivo(nombre, contenido);
 
-    function generarRespaldo() {
-        const respaldo = crearObjetoRespaldo();
-        const contenido = JSON.stringify(respaldo, null, 2);
-        const nombre = `respaldo-sistema-clinico-${nombreArchivoFecha()}.json`;
+            try {
+                const registro = await registrarHistorialRespaldoSupabase({
+                    nombreArchivo: nombre,
+                    totalModulos: resultado.respaldo.totalModulos,
+                    totalRegistros: resultado.respaldo.totalRegistros,
+                    tamanoBytes: tamano,
+                });
 
-        descargarArchivo(nombre, contenido);
+                if (registro) {
+                    setHistorial((actual) => [registro, ...actual]);
+                }
+            } catch (errorHistorial) {
+                console.error(errorHistorial);
+            }
 
-        const fechaActual = new Date().toISOString();
-        localStorage.setItem(ULTIMO_RESPALDO_KEY, fechaActual);
+            setItems(resultado.respaldo.items);
+            setErroresLectura(resultado.errores);
 
-        setUltimoRespaldo(fechaActual);
-        cargarEstado();
+            alert("Respaldo Supabase generado correctamente.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo generar el respaldo.";
 
-        alert("Respaldo generado correctamente.");
+            setError(mensaje);
+            alert(mensaje);
+        } finally {
+            setGenerando(false);
+        }
     }
 
     function seleccionarArchivo(event: ChangeEvent<HTMLInputElement>) {
@@ -361,21 +228,16 @@ export default function RespaldoPage() {
         lector.onload = () => {
             try {
                 const contenido = String(lector.result || "");
-                const datos = JSON.parse(contenido) as RespaldoSistema;
+                const datos = JSON.parse(contenido);
+                const validacion = validarArchivoRespaldoSupabase(datos);
 
-                if (datos.tipo !== "SISTEMA_CLINICO_RESPALDO") {
-                    alert("El archivo seleccionado no parece ser un respaldo válido.");
+                if (!validacion.valido || !validacion.respaldo) {
+                    alert(validacion.mensaje);
                     setRespaldoImportado(null);
                     return;
                 }
 
-                if (!Array.isArray(datos.items)) {
-                    alert("El respaldo no contiene una estructura válida de módulos.");
-                    setRespaldoImportado(null);
-                    return;
-                }
-
-                setRespaldoImportado(datos);
+                setRespaldoImportado(validacion.respaldo);
             } catch {
                 alert("No se pudo leer el archivo. Verificá que sea un JSON válido.");
                 setRespaldoImportado(null);
@@ -383,44 +245,6 @@ export default function RespaldoPage() {
         };
 
         lector.readAsText(archivo);
-    }
-
-    function restaurarRespaldo() {
-        if (!respaldoImportado) {
-            alert("Primero seleccioná un archivo de respaldo.");
-            return;
-        }
-
-        const confirmar = window.confirm(
-            "¿Seguro que deseas restaurar este respaldo? Los datos actuales de los módulos incluidos serán reemplazados."
-        );
-
-        if (!confirmar) return;
-
-        respaldoImportado.items.forEach((item) => {
-            if (!item.clave) return;
-
-            if (item.raw !== null && item.raw !== undefined) {
-                localStorage.setItem(item.clave, item.raw);
-                return;
-            }
-
-            localStorage.setItem(item.clave, JSON.stringify(item.datos ?? null));
-        });
-
-        const fechaActual = new Date().toISOString();
-        localStorage.setItem(ULTIMO_RESPALDO_KEY, fechaActual);
-
-        setRespaldoImportado(null);
-        setArchivoNombre("");
-
-        if (inputArchivoRef.current) {
-            inputArchivoRef.current.value = "";
-        }
-
-        cargarEstado();
-
-        alert("Respaldo restaurado correctamente.");
     }
 
     function limpiarArchivoImportado() {
@@ -432,34 +256,75 @@ export default function RespaldoPage() {
         }
     }
 
-    function borrarDatosLocales() {
-        const confirmar = window.confirm(
-            "¿Seguro que deseas borrar los datos locales del sistema? Esta acción no se puede deshacer si no tenés un respaldo."
-        );
-
-        if (!confirmar) return;
-
-        const segundaConfirmacion = window.confirm(
-            "Última confirmación: se borrarán pacientes, ventas, gastos, inventario, proveedores, agenda, cierres y configuración guardada en este navegador."
-        );
-
-        if (!segundaConfirmacion) return;
-
-        clavesRespaldo.forEach((item) => {
-            localStorage.removeItem(item.clave);
-        });
-
-        cargarEstado();
-
-        alert("Datos locales borrados correctamente.");
-    }
-
     return (
         <AppShell
             titulo="Respaldo"
-            descripcion="Copia de seguridad, restauración y control de datos locales del sistema"
+            descripcion="Copia de seguridad JSON desde la base de datos real de Supabase"
             moduloActivo="Respaldo"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo procesar Respaldo
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            {erroresLectura.length > 0 && (
+                <section className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-amber-800">
+                                Algunas tablas no devolvieron datos
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-amber-700">
+                                El respaldo se puede generar con las tablas disponibles. Esto puede pasar si una tabla todavía no existe o si no tiene permisos.
+                            </p>
+
+                            <details className="mt-2">
+                                <summary className="cursor-pointer text-xs font-black text-amber-800">
+                                    Ver detalle técnico
+                                </summary>
+                                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-700">
+                                    {erroresLectura.slice(0, 10).map((item) => (
+                                        <li key={item}>{item}</li>
+                                    ))}
+                                </ul>
+                            </details>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Respaldo conectado a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Genera una copia JSON de las tablas reales de la clínica. No depende de localStorage.
+                    </p>
+                </div>
+
+                <button
+                    onClick={cargarEstado}
+                    disabled={cargando || generando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar estado"}
+                </button>
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
                     <div className="flex items-start justify-between">
@@ -546,17 +411,18 @@ export default function RespaldoPage() {
                         </h3>
 
                         <p className="mt-2 text-sm leading-6 text-white/55">
-                            Descarga un archivo JSON con toda la información guardada en este
-                            navegador: pacientes, agenda, caja, gastos, inventario,
-                            proveedores, cierres, usuarios y configuración.
+                            Descarga un archivo JSON con la información actual de Supabase:
+                            pacientes, agenda, caja, gastos, inventario, proveedores, documentos,
+                            odontograma, presupuestos, órdenes de estudio, auditoría y configuración.
                         </p>
 
                         <button
                             onClick={generarRespaldo}
-                            className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-500 px-6 py-4 text-sm font-black text-white shadow-lg shadow-teal-500/20 hover:opacity-95"
+                            disabled={cargando || generando}
+                            className="mt-6 flex w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-500 px-6 py-4 text-sm font-black text-white shadow-lg shadow-teal-500/20 hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                             <Download className="h-5 w-5" />
-                            Descargar respaldo JSON
+                            {generando ? "Generando respaldo..." : "Descargar respaldo JSON"}
                         </button>
                     </div>
 
@@ -569,10 +435,10 @@ export default function RespaldoPage() {
 
                                 <div>
                                     <h3 className="text-[16px] font-bold text-slate-800">
-                                        Restaurar respaldo
+                                        Verificar respaldo
                                     </h3>
                                     <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                        Importa un respaldo generado anteriormente
+                                        Lee un JSON generado por este módulo
                                     </p>
                                 </div>
                             </div>
@@ -585,7 +451,7 @@ export default function RespaldoPage() {
                                     Seleccionar archivo JSON
                                 </span>
                                 <span className="mt-1 text-xs text-slate-400">
-                                    Debe ser un respaldo del Sistema Clínico
+                                    Debe ser un respaldo Supabase del Sistema Clínico
                                 </span>
 
                                 <input
@@ -627,6 +493,9 @@ export default function RespaldoPage() {
                                                     {fechaLegible(respaldoImportado.generadoEn)}
                                                 </strong>
                                                 <br />
+                                                Módulos incluidos:{" "}
+                                                <strong>{respaldoImportado.totalModulos}</strong>
+                                                <br />
                                                 Registros incluidos:{" "}
                                                 <strong>{registrosImportados}</strong>
                                             </p>
@@ -636,15 +505,6 @@ export default function RespaldoPage() {
                             )}
 
                             <div className="mt-5 flex flex-wrap gap-2">
-                                <button
-                                    onClick={restaurarRespaldo}
-                                    disabled={!respaldoImportado}
-                                    className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                    <CheckCircle2 className="h-4 w-4" />
-                                    Restaurar respaldo
-                                </button>
-
                                 <button
                                     onClick={limpiarArchivoImportado}
                                     className="rounded-xl bg-white px-5 py-3 text-[12px] font-bold text-slate-600 shadow-sm hover:bg-slate-50"
@@ -660,20 +520,11 @@ export default function RespaldoPage() {
                             <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
                             <div>
                                 <h3 className="text-sm font-black text-red-800">
-                                    Zona de riesgo
+                                    Restauración automática desactivada
                                 </h3>
                                 <p className="mt-1 text-xs leading-5 text-red-700">
-                                    Usá esta opción solo si querés limpiar los datos de este
-                                    navegador. Antes de borrar, generá un respaldo.
+                                    Este módulo genera y verifica respaldos reales de Supabase. No reemplaza datos automáticamente para evitar borrar o duplicar información clínica por accidente.
                                 </p>
-
-                                <button
-                                    onClick={borrarDatosLocales}
-                                    className="mt-4 flex items-center gap-2 rounded-xl bg-red-600 px-4 py-2.5 text-[12px] font-bold text-white hover:bg-red-700"
-                                >
-                                    <Trash2 className="h-4 w-4" />
-                                    Borrar datos locales
-                                </button>
                             </div>
                         </div>
                     </div>
@@ -685,18 +536,19 @@ export default function RespaldoPage() {
                             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                                 <div>
                                     <h3 className="text-[16px] font-bold text-slate-800">
-                                        Estado de datos locales
+                                        Estado de datos Supabase
                                     </h3>
                                     <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                        Módulos incluidos en el respaldo
+                                        Tablas incluidas en el respaldo
                                     </p>
                                 </div>
 
                                 <button
                                     onClick={cargarEstado}
-                                    className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                                    disabled={cargando || generando}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-white px-4 py-2.5 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
-                                    <RefreshCcw className="h-4 w-4" />
+                                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
                                     Recargar
                                 </button>
                             </div>
@@ -706,7 +558,7 @@ export default function RespaldoPage() {
                             <div className="space-y-3">
                                 {itemsConDatos.map((item) => (
                                     <div
-                                        key={item.clave}
+                                        key={item.tabla}
                                         className="rounded-3xl border border-slate-100 bg-white p-4 shadow-sm"
                                     >
                                         <div className="flex items-start gap-3">
@@ -726,7 +578,7 @@ export default function RespaldoPage() {
                                                 </div>
 
                                                 <p className="mt-1 text-xs font-semibold text-teal-700">
-                                                    {item.modulo}
+                                                    {item.modulo} · {item.tabla}
                                                 </p>
 
                                                 <p className="mt-2 text-xs leading-5 text-slate-500">
@@ -748,7 +600,7 @@ export default function RespaldoPage() {
                                                             Tamaño
                                                         </p>
                                                         <p className="mt-1 text-sm font-black text-blue-700">
-                                                            {formatoBytes(item.raw ? new Blob([item.raw]).size : 0)}
+                                                            {formatoBytes(tamanoBytesObjeto(item.datos))}
                                                         </p>
                                                     </div>
                                                 </div>
@@ -761,10 +613,62 @@ export default function RespaldoPage() {
                                     <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
                                         <Archive className="mx-auto h-10 w-10 text-slate-300" />
                                         <h4 className="mt-3 text-sm font-black text-slate-700">
-                                            No hay datos guardados
+                                            {cargando ? "Cargando datos..." : "No hay datos disponibles"}
                                         </h4>
                                         <p className="mt-1 text-xs text-slate-400">
-                                            Cuando registres información, aparecerá aquí.
+                                            {cargando
+                                                ? "Consultando Supabase."
+                                                : "Cuando registres información, aparecerá aquí."}
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="glass-card overflow-hidden rounded-2xl">
+                        <div className="border-b border-black/[0.04] px-6 py-4">
+                            <h3 className="text-[16px] font-bold text-slate-800">
+                                Historial de respaldos
+                            </h3>
+                            <p className="mono mt-0.5 text-[10px] text-slate-400">
+                                Últimos respaldos registrados en Supabase
+                            </p>
+                        </div>
+
+                        <div className="max-h-[320px] overflow-y-auto p-4">
+                            <div className="space-y-3">
+                                {historial.map((item) => (
+                                    <div
+                                        key={item.id}
+                                        className="rounded-2xl bg-slate-50 p-4"
+                                    >
+                                        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                                            <div>
+                                                <p className="text-sm font-black text-slate-800">
+                                                    {item.nombre_archivo}
+                                                </p>
+                                                <p className="mt-1 text-xs text-slate-500">
+                                                    {fechaLegible(item.creado_en)} · {item.usuario_nombre}
+                                                </p>
+                                            </div>
+
+                                            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-bold text-slate-600 shadow-sm">
+                                                {formatoBytes(item.tamano_bytes)}
+                                            </span>
+                                        </div>
+
+                                        <p className="mt-2 text-xs text-slate-500">
+                                            {item.total_modulos} módulo(s), {item.total_registros} registro(s)
+                                        </p>
+                                    </div>
+                                ))}
+
+                                {historial.length === 0 && (
+                                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white/70 p-8 text-center">
+                                        <Clock className="mx-auto h-8 w-8 text-slate-300" />
+                                        <p className="mt-3 text-xs text-slate-400">
+                                            Todavía no hay respaldos registrados.
                                         </p>
                                     </div>
                                 )}
@@ -776,24 +680,24 @@ export default function RespaldoPage() {
                         <div className="glass-card overflow-hidden rounded-2xl">
                             <div className="border-b border-black/[0.04] px-6 py-4">
                                 <h3 className="text-[16px] font-bold text-slate-800">
-                                    Módulos sin datos
+                                    Tablas sin datos
                                 </h3>
                                 <p className="mono mt-0.5 text-[10px] text-slate-400">
-                                    Se incluirán en el respaldo como vacíos
+                                    Se incluirán en el respaldo como vacías
                                 </p>
                             </div>
 
                             <div className="grid gap-2 p-4 md:grid-cols-2">
                                 {itemsSinDatos.map((item) => (
                                     <div
-                                        key={item.clave}
+                                        key={item.tabla}
                                         className="rounded-2xl bg-slate-50 px-4 py-3"
                                     >
                                         <p className="text-xs font-black text-slate-700">
                                             {item.nombre}
                                         </p>
                                         <p className="mt-0.5 text-[11px] text-slate-400">
-                                            {item.modulo}
+                                            {item.modulo} · {item.tabla}
                                         </p>
                                     </div>
                                 ))}
@@ -811,9 +715,7 @@ export default function RespaldoPage() {
                             Importante
                         </h3>
                         <p className="mt-1 text-xs leading-5 text-amber-700">
-                            Este respaldo corresponde a los datos guardados en este navegador
-                            mediante localStorage. Cuando migremos a Supabase, el respaldo se
-                            hará desde la base de datos real.
+                            Este respaldo es una copia JSON de datos de Supabase. Los archivos físicos de Supabase Storage, como imágenes o PDFs de documentos, no se descargan dentro del JSON; sí se respaldan sus metadatos.
                         </p>
                     </div>
                 </div>

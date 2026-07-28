@@ -24,6 +24,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     listarVentasSupabase,
     type EstadoVentaSupabase,
@@ -171,18 +172,6 @@ function normalizarTexto(valor: unknown) {
         .replace(/[\u0300-\u036f]/g, "");
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
 function convertirVenta(venta: VentaSupabase): Venta {
     return {
         id: venta.id,
@@ -273,7 +262,11 @@ export default function CierreCajaPage() {
             const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
             if (usuarioGuardado) setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
 
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const [ventasSupabase, gastosSupabase, cierresSupabase] = await Promise.all([
                 listarVentasSupabase(),
@@ -501,7 +494,7 @@ export default function CierreCajaPage() {
             <section className="print:hidden mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
                 <div>
                     <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">Cierre conectado a Supabase</p>
-                    <p className="mt-1 text-xs font-semibold text-slate-500">Ventas y cierres se leen desde Supabase. Gastos sigue temporalmente en localStorage hasta migrar ese módulo.</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">Ventas, gastos y cierres se leen desde Supabase.</p>
                 </div>
                 <button
                     type="button"

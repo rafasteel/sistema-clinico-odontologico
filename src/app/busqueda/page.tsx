@@ -4,17 +4,21 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
     Activity,
+    AlertTriangle,
     ArrowRight,
     BadgeDollarSign,
     CalendarClock,
     ClipboardList,
     CreditCard,
     FileText,
+    Package,
     Paperclip,
     Pill,
     ReceiptText,
+    RefreshCcw,
     Search,
     Stethoscope,
+    Truck,
     UserRound,
     WalletCards,
     XCircle,
@@ -25,6 +29,54 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    listarPacientesSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
+import {
+    listarCitasSupabase,
+    type CitaSupabase,
+    type EstadoCitaSupabase,
+} from "@/lib/supabase/citas";
+import {
+    listarNotasClinicasPacienteSupabase,
+    listarRecetasPacienteSupabase,
+    listarTratamientosPacienteSupabase,
+    type NotaClinicaSupabase,
+    type RecetaSupabase,
+    type TratamientoSupabase,
+} from "@/lib/supabase/perfilPaciente";
+import {
+    listarCuentasCobrarSupabase,
+    listarVentasSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    listarDoctoresSupabase,
+    listarServiciosSupabase,
+    type DoctorSupabase,
+    type ServicioSupabase,
+} from "@/lib/supabase/doctoresServicios";
+import {
+    listarProductosInventarioSupabase,
+    type ProductoInventarioSupabase,
+} from "@/lib/supabase/inventario";
+import {
+    listarProveedoresSupabase,
+    type ProveedorSupabase,
+} from "@/lib/supabase/proveedores";
+import {
+    listarPresupuestosSupabase,
+    type PresupuestoSupabase,
+} from "@/lib/supabase/presupuestos";
+import {
+    listarDocumentosSupabase,
+    type DocumentoPacienteSupabase,
+} from "@/lib/supabase/documentosPacientes";
 
 type Paciente = {
     id: string;
@@ -42,16 +94,7 @@ type Paciente = {
     ultimaCita: string;
 };
 
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cobrada"
-    | "Reagendada"
-    | "Cancelada"
-    | "No asistió";
+type EstadoCita = EstadoCitaSupabase;
 
 type Cita = {
     id: string;
@@ -73,6 +116,7 @@ type Cita = {
 type NotaClinica = {
     id: string;
     pacienteId: string;
+    pacienteNombre: string;
     fecha: string;
     hora: string;
     doctor: string;
@@ -88,6 +132,7 @@ type NotaClinica = {
 type Tratamiento = {
     id: string;
     pacienteId: string;
+    pacienteNombre: string;
     fecha: string;
     nombre: string;
     descripcion: string;
@@ -99,11 +144,12 @@ type Tratamiento = {
 type Receta = {
     id: string;
     pacienteId: string;
+    pacienteNombre: string;
     fecha: string;
     hora: string;
     doctor: string;
-    doctorNombre?: string;
-    diagnostico?: string;
+    doctorNombre: string;
+    diagnostico: string;
     medicamento: string;
     indicaciones: string;
     duracion: string;
@@ -111,7 +157,7 @@ type Receta = {
     estado: "Activa" | "Anulada";
 };
 
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
+type EstadoVenta = EstadoVentaSupabase;
 
 type Venta = {
     id: string;
@@ -132,7 +178,7 @@ type Venta = {
     observaciones: string;
 };
 
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
+type EstadoCuenta = EstadoCuentaCobrarSupabase;
 
 type CuentaPorCobrar = {
     id: string;
@@ -170,8 +216,52 @@ type DocumentoPaciente = {
     tamanoBytes: number;
     categoria: string;
     descripcion: string;
-    dataUrl: string;
+    urlFirmada?: string;
     usuarioNombre: string;
+};
+
+type Doctor = {
+    id: string;
+    nombre: string;
+    especialidad: string;
+    telefono: string;
+    correo: string;
+    estado: "Activo" | "Inactivo";
+};
+
+type Servicio = {
+    id: string;
+    nombre: string;
+    categoria: string;
+    descripcion: string;
+    precio: number;
+    duracionMinutos: number;
+    estado: "Activo" | "Inactivo";
+};
+
+type Producto = {
+    id: string;
+    codigo: string;
+    nombre: string;
+    categoria: string;
+    unidad: string;
+    stock: number;
+    stockMinimo: number;
+    costoCompra: number;
+    precioVenta: number;
+    proveedor: string;
+    vencimiento: string;
+    estado: "Activo" | "Inactivo";
+};
+
+type Proveedor = {
+    id: string;
+    nombre: string;
+    contacto: string;
+    telefono: string;
+    correo: string;
+    direccion: string;
+    estado: "Activo" | "Inactivo";
 };
 
 type TipoResultado =
@@ -183,6 +273,10 @@ type TipoResultado =
     | "Receta"
     | "Venta"
     | "Cuenta por cobrar"
+    | "Doctor"
+    | "Servicio"
+    | "Producto"
+    | "Proveedor"
     | "Presupuesto"
     | "Documento";
 
@@ -198,16 +292,6 @@ type ResultadoBusqueda = {
     href: string;
 };
 
-const PACIENTES_KEY = "pacientes_sistema_clinico";
-const CITAS_KEY = "citas_sistema_clinico";
-const NOTAS_KEY = "notas_clinicas_sistema_clinico";
-const TRATAMIENTOS_KEY = "tratamientos_sistema_clinico";
-const RECETAS_KEY = "recetas_sistema_clinico";
-const VENTAS_KEY = "ventas_sistema_clinico";
-const CUENTAS_KEY = "cuentas_cobrar_sistema_clinico";
-const PRESUPUESTOS_KEY = "presupuestos_sistema_clinico";
-const DOCUMENTOS_KEY = "documentos_pacientes_sistema_clinico";
-
 const tiposBusqueda: TipoResultado[] = [
     "Todos",
     "Paciente",
@@ -217,21 +301,24 @@ const tiposBusqueda: TipoResultado[] = [
     "Receta",
     "Venta",
     "Cuenta por cobrar",
+    "Doctor",
+    "Servicio",
+    "Producto",
+    "Proveedor",
     "Presupuesto",
     "Documento",
 ];
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
+function numero(valor: unknown) {
+    const convertido = Number(valor || 0);
 
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
+    if (Number.isNaN(convertido)) return 0;
 
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
+    return convertido;
+}
+
+function horaCorta(valor: unknown) {
+    return String(valor || "").slice(0, 5);
 }
 
 function formatoMoneda(valor: number, simbolo = "C$") {
@@ -250,8 +337,8 @@ function fechaLegible(fecha: string) {
     return `${partes[2]}/${partes[1]}/${partes[0]}`;
 }
 
-function normalizar(texto: string) {
-    return texto
+function normalizar(textoValor: unknown) {
+    return String(textoValor || "")
         .toLowerCase()
         .normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "");
@@ -265,6 +352,10 @@ function colorTipo(tipo: ResultadoBusqueda["tipo"]) {
     if (tipo === "Receta") return "bg-purple-50 text-purple-700";
     if (tipo === "Venta") return "bg-emerald-50 text-emerald-700";
     if (tipo === "Cuenta por cobrar") return "bg-red-50 text-red-700";
+    if (tipo === "Doctor") return "bg-cyan-50 text-cyan-700";
+    if (tipo === "Servicio") return "bg-indigo-50 text-indigo-700";
+    if (tipo === "Producto") return "bg-orange-50 text-orange-700";
+    if (tipo === "Proveedor") return "bg-lime-50 text-lime-700";
     if (tipo === "Presupuesto") return "bg-indigo-50 text-indigo-700";
 
     return "bg-cyan-50 text-cyan-700";
@@ -278,9 +369,200 @@ function iconoTipo(tipo: ResultadoBusqueda["tipo"]) {
     if (tipo === "Receta") return <Pill className="h-5 w-5" />;
     if (tipo === "Venta") return <ReceiptText className="h-5 w-5" />;
     if (tipo === "Cuenta por cobrar") return <WalletCards className="h-5 w-5" />;
+    if (tipo === "Doctor") return <Stethoscope className="h-5 w-5" />;
+    if (tipo === "Servicio") return <FileText className="h-5 w-5" />;
+    if (tipo === "Producto") return <Package className="h-5 w-5" />;
+    if (tipo === "Proveedor") return <Truck className="h-5 w-5" />;
     if (tipo === "Presupuesto") return <FileText className="h-5 w-5" />;
 
     return <Paperclip className="h-5 w-5" />;
+}
+
+function convertirPaciente(paciente: PacienteSupabase, saldo = 0): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "",
+        enfermedades:
+            paciente.enfermedades_sistemicas ||
+            paciente.antecedentes ||
+            "",
+        medicamentos: paciente.medicamentos_actuales || "",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: saldo,
+        ultimaCita: "",
+    };
+}
+
+function convertirCita(cita: CitaSupabase): Cita {
+    return {
+        id: cita.id,
+        pacienteId: cita.paciente_id || "",
+        pacienteNombre: cita.paciente_nombre || "",
+        doctorId: cita.doctor_id || "",
+        doctorNombre: cita.doctor_nombre || "",
+        servicioId: cita.servicio_id || "",
+        servicioNombre: cita.servicio_nombre || "",
+        costo: numero(cita.costo),
+        fecha: cita.fecha || "",
+        hora: horaCorta(cita.hora),
+        recurrencia: cita.recurrencia || "",
+        estado: cita.estado || "Programada",
+        observaciones: cita.observaciones || "",
+        creadaEn: cita.creado_en || "",
+    };
+}
+
+function convertirNota(
+    nota: NotaClinicaSupabase,
+    pacienteNombre: string
+): NotaClinica {
+    return {
+        id: nota.id,
+        pacienteId: nota.paciente_id || "",
+        pacienteNombre,
+        fecha: nota.fecha || "",
+        hora: horaCorta(nota.hora),
+        doctor: nota.doctor_nombre || "",
+        servicio: nota.servicio_nombre || "",
+        diagnostico: nota.diagnostico || "",
+        procedimiento: nota.procedimiento || "",
+        observaciones: nota.observaciones || "",
+        proximaCita: nota.proxima_cita || "",
+        usuarioNombre: "Usuario del sistema",
+        estado: nota.estado || "Activa",
+    };
+}
+
+function convertirTratamiento(
+    tratamiento: TratamientoSupabase,
+    pacienteNombre: string
+): Tratamiento {
+    return {
+        id: tratamiento.id,
+        pacienteId: tratamiento.paciente_id || "",
+        pacienteNombre,
+        fecha: tratamiento.fecha || "",
+        nombre: tratamiento.nombre || "",
+        descripcion: tratamiento.descripcion || "",
+        total: numero(tratamiento.total),
+        abonado: numero(tratamiento.abonado),
+        estado: tratamiento.estado || "Planificado",
+    };
+}
+
+function convertirReceta(
+    receta: RecetaSupabase,
+    pacienteNombre: string
+): Receta {
+    return {
+        id: receta.id,
+        pacienteId: receta.paciente_id || "",
+        pacienteNombre,
+        fecha: receta.fecha || "",
+        hora: horaCorta(receta.hora),
+        doctor: receta.doctor_nombre || "",
+        doctorNombre: receta.doctor_nombre || "",
+        diagnostico: receta.diagnostico || "",
+        medicamento: receta.medicamento || "",
+        indicaciones: receta.indicaciones || "",
+        duracion: receta.duracion || "",
+        observaciones: receta.observaciones || "",
+        estado: receta.estado || "Activa",
+    };
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha || "",
+        hora: horaCorta(venta.hora),
+        tipoCobro: venta.tipo_cobro || "Venta",
+        citaId: venta.cita_id || "",
+        pacienteId: venta.paciente_id || "",
+        clienteNombre: venta.cliente_nombre || "",
+        concepto: venta.concepto || "",
+        total: numero(venta.total),
+        efectivo: numero(venta.efectivo),
+        tarjeta: numero(venta.tarjeta),
+        transferencia: numero(venta.transferencia),
+        credito: numero(venta.credito),
+        estado: venta.estado || "Pagada",
+        usuarioNombre: venta.usuario_nombre || "",
+        observaciones: venta.observaciones || "",
+    };
+}
+
+function convertirCuenta(cuenta: CuentaCobrarSupabase): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: numero(cuenta.total),
+        saldo: numero(cuenta.saldo),
+        fecha: cuenta.fecha || "",
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado || "Pendiente",
+    };
+}
+
+function convertirDoctor(doctor: DoctorSupabase): Doctor {
+    return {
+        id: doctor.id,
+        nombre: doctor.nombre || "",
+        especialidad: doctor.especialidad || "",
+        telefono: doctor.telefono || "",
+        correo: doctor.correo || "",
+        estado: doctor.estado || "Activo",
+    };
+}
+
+function convertirServicio(servicio: ServicioSupabase): Servicio {
+    return {
+        id: servicio.id,
+        nombre: servicio.nombre || "",
+        categoria: servicio.categoria || "",
+        descripcion: servicio.descripcion || "",
+        precio: numero(servicio.precio),
+        duracionMinutos: numero(servicio.duracion_minutos),
+        estado: servicio.estado || "Activo",
+    };
+}
+
+function convertirProducto(producto: ProductoInventarioSupabase): Producto {
+    return {
+        id: producto.id,
+        codigo: producto.codigo || "",
+        nombre: producto.nombre || "",
+        categoria: producto.categoria || "",
+        unidad: producto.unidad || "",
+        stock: numero(producto.stock),
+        stockMinimo: numero(producto.stock_minimo),
+        costoCompra: numero(producto.costo_compra),
+        precioVenta: numero(producto.precio_venta),
+        proveedor: producto.proveedor || "",
+        vencimiento: producto.vencimiento || "",
+        estado: producto.estado || "Activo",
+    };
+}
+
+function convertirProveedor(proveedor: ProveedorSupabase): Proveedor {
+    return {
+        id: proveedor.id,
+        nombre: proveedor.nombre || "",
+        contacto: proveedor.contacto || "",
+        telefono: proveedor.telefono || "",
+        correo: proveedor.correo || "",
+        direccion: proveedor.direccion || "",
+        estado: proveedor.estado || "Activo",
+    };
 }
 
 export default function BusquedaGlobalPage() {
@@ -295,24 +577,187 @@ export default function BusquedaGlobalPage() {
     const [recetas, setRecetas] = useState<Receta[]>([]);
     const [ventas, setVentas] = useState<Venta[]>([]);
     const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([]);
+    const [doctores, setDoctores] = useState<Doctor[]>([]);
+    const [servicios, setServicios] = useState<Servicio[]>([]);
+    const [productos, setProductos] = useState<Producto[]>([]);
+    const [proveedores, setProveedores] = useState<Proveedor[]>([]);
     const [presupuestos, setPresupuestos] = useState<Presupuesto[]>([]);
     const [documentos, setDocumentos] = useState<DocumentoPaciente[]>([]);
 
     const [busqueda, setBusqueda] = useState("");
     const [tipoFiltro, setTipoFiltro] = useState<TipoResultado>("Todos");
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            if (typeof window !== "undefined") {
+                const parametros = new URLSearchParams(window.location.search);
+                const busquedaUrl = parametros.get("q") || "";
+
+                if (busquedaUrl) {
+                    setBusqueda(busquedaUrl);
+                }
+            }
+
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const [
+                pacientesSupabase,
+                citasSupabase,
+                ventasSupabase,
+                cuentasSupabase,
+                doctoresSupabase,
+                serviciosSupabase,
+                productosSupabase,
+                proveedoresSupabase,
+                presupuestosSupabase,
+                documentosSupabase,
+            ] = await Promise.all([
+                listarPacientesSupabase(),
+                listarCitasSupabase(),
+                listarVentasSupabase(),
+                listarCuentasCobrarSupabase(),
+                listarDoctoresSupabase(),
+                listarServiciosSupabase(),
+                listarProductosInventarioSupabase(),
+                listarProveedoresSupabase(),
+                listarPresupuestosSupabase(),
+                listarDocumentosSupabase(),
+            ]);
+
+            const cuentasConvertidas = cuentasSupabase.map(convertirCuenta);
+
+            const saldoPorPaciente = cuentasConvertidas.reduce<Record<string, number>>(
+                (mapa, cuenta) => {
+                    if (
+                        cuenta.estado !== "Pagada" &&
+                        cuenta.estado !== "Anulada" &&
+                        cuenta.saldo > 0
+                    ) {
+                        mapa[cuenta.pacienteId] =
+                            (mapa[cuenta.pacienteId] || 0) + cuenta.saldo;
+                    }
+
+                    return mapa;
+                },
+                {}
+            );
+
+            const pacientesConvertidos = pacientesSupabase.map((paciente) =>
+                convertirPaciente(paciente, saldoPorPaciente[paciente.id] || 0)
+            );
+
+            const nombrePacientePorId = pacientesConvertidos.reduce<
+                Record<string, string>
+            >((mapa, paciente) => {
+                mapa[paciente.id] = paciente.nombre;
+                return mapa;
+            }, {});
+
+            const datosClinicos = await Promise.all(
+                pacientesConvertidos.map(async (paciente) => {
+                    try {
+                        const [notasPaciente, tratamientosPaciente, recetasPaciente] =
+                            await Promise.all([
+                                listarNotasClinicasPacienteSupabase(paciente.id),
+                                listarTratamientosPacienteSupabase(paciente.id),
+                                listarRecetasPacienteSupabase(paciente.id),
+                            ]);
+
+                        return {
+                            notas: notasPaciente.map((nota) =>
+                                convertirNota(nota, paciente.nombre)
+                            ),
+                            tratamientos: tratamientosPaciente.map((tratamiento) =>
+                                convertirTratamiento(tratamiento, paciente.nombre)
+                            ),
+                            recetas: recetasPaciente.map((receta) =>
+                                convertirReceta(receta, paciente.nombre)
+                            ),
+                        };
+                    } catch {
+                        return {
+                            notas: [] as NotaClinica[],
+                            tratamientos: [] as Tratamiento[],
+                            recetas: [] as Receta[],
+                        };
+                    }
+                })
+            );
+
+            setPacientes(pacientesConvertidos);
+            setCitas(citasSupabase.map(convertirCita));
+            setVentas(ventasSupabase.map(convertirVenta));
+            setCuentas(cuentasConvertidas);
+            setDoctores(doctoresSupabase.map(convertirDoctor));
+            setServicios(serviciosSupabase.map(convertirServicio));
+            setProductos(productosSupabase.map(convertirProducto));
+            setProveedores(proveedoresSupabase.map(convertirProveedor));
+            setNotas(datosClinicos.flatMap((item) => item.notas));
+            setTratamientos(datosClinicos.flatMap((item) => item.tratamientos));
+            setRecetas(datosClinicos.flatMap((item) => item.recetas));
+
+            const presupuestosLocales = presupuestosSupabase.map(
+                (presupuesto: PresupuestoSupabase) => ({
+                    id: presupuesto.id,
+                    pacienteId: presupuesto.paciente_id,
+                    pacienteNombre:
+                        presupuesto.paciente_nombre ||
+                        nombrePacientePorId[presupuesto.paciente_id] ||
+                        "Paciente no especificado",
+                    fecha: presupuesto.fecha,
+                    hora: String(presupuesto.hora || "").slice(0, 5),
+                    total: numero(presupuesto.total),
+                    estado: presupuesto.estado || "Pendiente",
+                    origen: presupuesto.origen || "Manual",
+                    observaciones: presupuesto.observaciones || "",
+                })
+            );
+
+            const documentosSupabaseConvertidos = documentosSupabase.map(
+                (documento: DocumentoPacienteSupabase) => ({
+                    id: documento.id,
+                    pacienteId: documento.paciente_id,
+                    pacienteNombre:
+                        documento.paciente_nombre ||
+                        nombrePacientePorId[documento.paciente_id] ||
+                        "Paciente no especificado",
+                    fecha: documento.fecha,
+                    hora: String(documento.hora || "").slice(0, 5),
+                    nombreArchivo: documento.nombre_archivo,
+                    tipoArchivo: documento.tipo_archivo,
+                    tamanoBytes: Number(documento.tamano_bytes || 0),
+                    categoria: documento.categoria,
+                    descripcion: documento.descripcion || "",
+                    urlFirmada: documento.url_firmada || "",
+                    usuarioNombre: documento.usuario_nombre || "Usuario no identificado",
+                })
+            );
+
+            setPresupuestos(presupuestosLocales);
+            setDocumentos(documentosSupabaseConvertidos);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar la búsqueda global desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        setConfiguracion(obtenerConfiguracionClinica());
-
-        setPacientes(leerLocalStorage<Paciente[]>(PACIENTES_KEY, []));
-        setCitas(leerLocalStorage<Cita[]>(CITAS_KEY, []));
-        setNotas(leerLocalStorage<NotaClinica[]>(NOTAS_KEY, []));
-        setTratamientos(leerLocalStorage<Tratamiento[]>(TRATAMIENTOS_KEY, []));
-        setRecetas(leerLocalStorage<Receta[]>(RECETAS_KEY, []));
-        setVentas(leerLocalStorage<Venta[]>(VENTAS_KEY, []));
-        setCuentas(leerLocalStorage<CuentaPorCobrar[]>(CUENTAS_KEY, []));
-        setPresupuestos(leerLocalStorage<Presupuesto[]>(PRESUPUESTOS_KEY, []));
-        setDocumentos(leerLocalStorage<DocumentoPaciente[]>(DOCUMENTOS_KEY, []));
+        cargarDatos();
     }, []);
 
     const resultados = useMemo<ResultadoBusqueda[]>(() => {
@@ -347,14 +792,13 @@ export default function BusquedaGlobalPage() {
             id: `NOTA-${nota.id}`,
             tipo: "Nota clínica",
             titulo: nota.servicio || "Nota clínica",
-            subtitulo: `Doctor: ${nota.doctor || "No especificado"} · ${fechaLegible(
-                nota.fecha
-            )}`,
+            subtitulo: `${nota.pacienteNombre || "Paciente"} · Doctor: ${nota.doctor || "No especificado"
+                } · ${fechaLegible(nota.fecha)}`,
             detalle: `${nota.diagnostico || "Sin diagnóstico"} · ${nota.procedimiento || "Sin procedimiento"
                 }`,
             fecha: nota.fecha,
             estado: nota.estado,
-            href: `/notas/${nota.id}`,
+            href: `/pacientes/${nota.pacienteId}`,
         }));
 
         const resultadosTratamientos: ResultadoBusqueda[] = tratamientos.map(
@@ -362,12 +806,14 @@ export default function BusquedaGlobalPage() {
                 id: `TRAT-${tratamiento.id}`,
                 tipo: "Tratamiento",
                 titulo: tratamiento.nombre,
-                subtitulo: fechaLegible(tratamiento.fecha),
+                subtitulo: `${tratamiento.pacienteNombre || "Paciente"} · ${fechaLegible(
+                    tratamiento.fecha
+                )}`,
                 detalle: tratamiento.descripcion || "Sin descripción registrada",
                 fecha: tratamiento.fecha,
                 estado: tratamiento.estado,
                 monto: tratamiento.total || 0,
-                href: `/tratamientos/${tratamiento.id}`,
+                href: `/pacientes/${tratamiento.pacienteId}`,
             })
         );
 
@@ -375,12 +821,12 @@ export default function BusquedaGlobalPage() {
             id: `REC-${receta.id}`,
             tipo: "Receta",
             titulo: receta.medicamento,
-            subtitulo: `Doctor: ${receta.doctor || receta.doctorNombre || "No especificado"
+            subtitulo: `${receta.pacienteNombre || "Paciente"} · Doctor: ${receta.doctor || receta.doctorNombre || "No especificado"
                 } · ${fechaLegible(receta.fecha)}`,
             detalle: receta.indicaciones || "Sin indicaciones registradas",
             fecha: receta.fecha,
             estado: receta.estado,
-            href: `/recetas/${receta.id}`,
+            href: `/pacientes/${receta.pacienteId}`,
         }));
 
         const resultadosVentas: ResultadoBusqueda[] = ventas.map((venta) => ({
@@ -401,7 +847,9 @@ export default function BusquedaGlobalPage() {
             tipo: "Cuenta por cobrar",
             titulo: cuenta.pacienteNombre || "Paciente no especificado",
             subtitulo: cuenta.concepto || "Cuenta por cobrar",
-            detalle: `Vence: ${fechaLegible(cuenta.fechaVencimiento)} · Saldo: ${formatoMoneda(
+            detalle: `Vence: ${fechaLegible(
+                cuenta.fechaVencimiento
+            )} · Saldo: ${formatoMoneda(
                 cuenta.saldo || 0,
                 configuracion.simboloMoneda
             )}`,
@@ -410,6 +858,59 @@ export default function BusquedaGlobalPage() {
             monto: cuenta.saldo || 0,
             href: `/estado-cuenta/${cuenta.pacienteId}`,
         }));
+
+        const resultadosDoctores: ResultadoBusqueda[] = doctores.map((doctor) => ({
+            id: `DOCTOR-${doctor.id}`,
+            tipo: "Doctor",
+            titulo: doctor.nombre,
+            subtitulo: doctor.especialidad || "Doctor",
+            detalle: `Tel: ${doctor.telefono || "No registrado"} · Correo: ${doctor.correo || "No registrado"
+                }`,
+            fecha: "",
+            estado: doctor.estado,
+            href: "/doctores-servicios",
+        }));
+
+        const resultadosServicios: ResultadoBusqueda[] = servicios.map((servicio) => ({
+            id: `SERVICIO-${servicio.id}`,
+            tipo: "Servicio",
+            titulo: servicio.nombre,
+            subtitulo: `${servicio.categoria || "Servicio"} · ${servicio.duracionMinutos || 0
+                } min`,
+            detalle: servicio.descripcion || "Sin descripción registrada",
+            fecha: "",
+            estado: servicio.estado,
+            monto: servicio.precio || 0,
+            href: "/doctores-servicios",
+        }));
+
+        const resultadosProductos: ResultadoBusqueda[] = productos.map((producto) => ({
+            id: `PRODUCTO-${producto.id}`,
+            tipo: "Producto",
+            titulo: producto.nombre,
+            subtitulo: `${producto.codigo || "Sin código"} · ${producto.categoria || "Inventario"
+                }`,
+            detalle: `Stock: ${producto.stock} ${producto.unidad || ""} · Mínimo: ${producto.stockMinimo
+                } · Proveedor: ${producto.proveedor || "No registrado"}`,
+            fecha: producto.vencimiento || "",
+            estado: producto.estado,
+            monto: producto.precioVenta || 0,
+            href: "/inventario",
+        }));
+
+        const resultadosProveedores: ResultadoBusqueda[] = proveedores.map(
+            (proveedor) => ({
+                id: `PROVEEDOR-${proveedor.id}`,
+                tipo: "Proveedor",
+                titulo: proveedor.nombre,
+                subtitulo: proveedor.contacto || "Proveedor",
+                detalle: `Tel: ${proveedor.telefono || "No registrado"} · Correo: ${proveedor.correo || "No registrado"
+                    } · Dirección: ${proveedor.direccion || "No registrada"}`,
+                fecha: "",
+                estado: proveedor.estado,
+                href: "/proveedores",
+            })
+        );
 
         const resultadosPresupuestos: ResultadoBusqueda[] = presupuestos.map(
             (presupuesto) => ({
@@ -447,6 +948,10 @@ export default function BusquedaGlobalPage() {
             ...resultadosRecetas,
             ...resultadosVentas,
             ...resultadosCuentas,
+            ...resultadosDoctores,
+            ...resultadosServicios,
+            ...resultadosProductos,
+            ...resultadosProveedores,
             ...resultadosPresupuestos,
             ...resultadosDocumentos,
         ].sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -458,13 +963,17 @@ export default function BusquedaGlobalPage() {
         recetas,
         ventas,
         cuentas,
+        doctores,
+        servicios,
+        productos,
+        proveedores,
         presupuestos,
         documentos,
         configuracion.simboloMoneda,
     ]);
 
     const resultadosFiltrados = useMemo(() => {
-        const texto = normalizar(busqueda.trim());
+        const textoBusqueda = normalizar(busqueda.trim());
 
         return resultados.filter((resultado) => {
             const coincideTipo = tipoFiltro === "Todos" || resultado.tipo === tipoFiltro;
@@ -473,16 +982,28 @@ export default function BusquedaGlobalPage() {
                 `${resultado.tipo} ${resultado.titulo} ${resultado.subtitulo} ${resultado.detalle} ${resultado.estado}`
             );
 
-            const coincideBusqueda = !texto || textoResultado.includes(texto);
+            const coincideBusqueda =
+                !textoBusqueda || textoResultado.includes(textoBusqueda);
 
             return coincideTipo && coincideBusqueda;
         });
     }, [resultados, busqueda, tipoFiltro]);
 
     const totalPacientes = pacientes.length;
-    const totalEventosClinicos = notas.length + tratamientos.length + recetas.length + citas.length;
-    const totalFinanciero = ventas.reduce((total, venta) => total + (venta.total || 0), 0);
-    const totalPendiente = cuentas.reduce((total, cuenta) => total + (cuenta.saldo || 0), 0);
+    const totalEventosClinicos =
+        notas.length + tratamientos.length + recetas.length + citas.length;
+    const totalFinanciero = ventas.reduce(
+        (total, venta) => total + (venta.total || 0),
+        0
+    );
+    const totalPendiente = cuentas
+        .filter(
+            (cuenta) =>
+                cuenta.estado !== "Pagada" &&
+                cuenta.estado !== "Anulada" &&
+                cuenta.saldo > 0
+        )
+        .reduce((total, cuenta) => total + (cuenta.saldo || 0), 0);
 
     return (
         <AppShell
@@ -490,6 +1011,43 @@ export default function BusquedaGlobalPage() {
             descripcion="Buscador general de pacientes, documentos, historial clínico y movimientos"
             moduloActivo="Búsqueda Global"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo cargar la búsqueda global
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Búsqueda conectada a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Pacientes, citas, historial clínico, ventas, cuentas, doctores, servicios, inventario y proveedores se leen desde la base de datos.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar"}
+                </button>
+            </section>
+
             <section className="overflow-hidden rounded-3xl bg-slate-900 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">
                 <div className="grid gap-6 lg:grid-cols-[1fr_340px] lg:items-center">
                     <div>
@@ -502,8 +1060,8 @@ export default function BusquedaGlobalPage() {
                         </h2>
 
                         <p className="mt-2 max-w-3xl text-sm leading-6 text-white/55">
-                            Encontrá rápidamente pacientes, citas, documentos, recetas,
-                            tratamientos, presupuestos, ventas y cuentas por cobrar desde una
+                            Encontrá rápidamente pacientes, citas, historial clínico,
+                            ventas, cuentas por cobrar, inventario y proveedores desde una
                             sola pantalla.
                         </p>
                     </div>
@@ -516,7 +1074,9 @@ export default function BusquedaGlobalPage() {
                         <h3 className="mt-3 text-4xl font-black">{resultados.length}</h3>
 
                         <p className="mt-2 text-sm text-white/50">
-                            Resultados disponibles para buscar.
+                            {cargando
+                                ? "Cargando resultados desde Supabase..."
+                                : "Resultados disponibles para buscar."}
                         </p>
                     </div>
                 </div>
@@ -581,7 +1141,7 @@ export default function BusquedaGlobalPage() {
                                 autoFocus
                                 value={busqueda}
                                 onChange={(event) => setBusqueda(event.target.value)}
-                                placeholder="Buscar paciente, cédula, medicamento, tratamiento, documento, venta..."
+                                placeholder="Buscar paciente, cédula, teléfono, medicamento, venta, producto, proveedor..."
                                 className="w-full bg-transparent text-sm font-semibold outline-none"
                             />
 
@@ -692,11 +1252,12 @@ export default function BusquedaGlobalPage() {
                             <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
                                 <Search className="mx-auto h-10 w-10 text-slate-300" />
                                 <h4 className="mt-3 text-sm font-black text-slate-700">
-                                    Sin resultados
+                                    {cargando ? "Cargando resultados..." : "Sin resultados"}
                                 </h4>
                                 <p className="mt-1 text-xs text-slate-400">
-                                    Probá buscando por nombre, cédula, teléfono, medicamento,
-                                    documento, tratamiento o concepto de venta.
+                                    {cargando
+                                        ? "Estamos consultando Supabase."
+                                        : "Probá buscando por nombre, cédula, teléfono, medicamento, documento, tratamiento, producto, proveedor o concepto de venta."}
                                 </p>
                             </div>
                         )}

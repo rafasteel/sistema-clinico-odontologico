@@ -28,6 +28,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     listarPacientesSupabase,
     type PacienteSupabase,
@@ -351,7 +352,11 @@ export default function AgendaPage() {
         setError("");
 
         try {
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const [
                 pacientesSupabase,
@@ -829,8 +834,8 @@ export default function AgendaPage() {
                                                 type="button"
                                                 onClick={() => seleccionarPacienteCita(paciente)}
                                                 className={`flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left hover:bg-teal-50 ${formulario.pacienteId === paciente.id
-                                                        ? "bg-teal-50"
-                                                        : "bg-white"
+                                                    ? "bg-teal-50"
+                                                    : "bg-white"
                                                     }`}
                                             >
                                                 <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 text-[11px] font-black text-white">

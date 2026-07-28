@@ -25,6 +25,7 @@ import {
     obtenerConfiguracionClinica,
     type POSClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     anularCuentaCobrarSupabase,
     listarAbonosCuentaSupabase,
@@ -146,19 +147,6 @@ function normalizarTexto(texto: unknown) {
         .replace(/\s+/g, " ");
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
 function obtenerEstadoVisual(cuenta: CuentaPorCobrar): EstadoCuentaCobrarSupabase {
     if (cuenta.estado === "Pagada" || cuenta.estado === "Anulada") {
         return cuenta.estado;
@@ -276,7 +264,14 @@ export default function CuentasCobrarPage() {
         setError("");
 
         try {
-            const configuracionActual = obtenerConfiguracionClinica();
+            let configuracionActual: ConfiguracionClinica;
+
+            try {
+                configuracionActual = await obtenerConfiguracionClinicaSupabase();
+            } catch {
+                configuracionActual = obtenerConfiguracionClinica();
+            }
+
             const posInicial =
                 (configuracionActual.poses || []).find((pos) => pos.activo) ||
                 (configuracionActual.poses || [])[0];
@@ -287,12 +282,8 @@ export default function CuentasCobrarPage() {
                 posId: datosActuales.posId || posInicial?.id || "",
             }));
 
-            setUsuario(
-                leerLocalStorage<UsuarioSistema | null>(
-                    "usuario_sistema_clinico",
-                    null
-                )
-            );
+            const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+            setUsuario(usuarioGuardado ? (JSON.parse(usuarioGuardado) as UsuarioSistema) : null);
 
             const [cuentasSupabase, pacientesSupabase] = await Promise.all([
                 listarCuentasCobrarSupabase(),
@@ -1356,22 +1347,22 @@ export default function CuentasCobrarPage() {
 
                                         <div
                                             className={`rounded-2xl p-3 ${cuentaSeleccionada && diferenciaAbono < -0.01
-                                                    ? "bg-rose-50"
-                                                    : "bg-emerald-50"
+                                                ? "bg-rose-50"
+                                                : "bg-emerald-50"
                                                 }`}
                                         >
                                             <p
                                                 className={`text-[10px] font-bold ${cuentaSeleccionada && diferenciaAbono < -0.01
-                                                        ? "text-rose-700"
-                                                        : "text-emerald-700"
+                                                    ? "text-rose-700"
+                                                    : "text-emerald-700"
                                                     }`}
                                             >
                                                 Saldo después
                                             </p>
                                             <p
                                                 className={`mt-1 text-sm font-black ${cuentaSeleccionada && diferenciaAbono < -0.01
-                                                        ? "text-rose-700"
-                                                        : "text-emerald-700"
+                                                    ? "text-rose-700"
+                                                    : "text-emerald-700"
                                                     }`}
                                             >
                                                 {formatoMoneda(

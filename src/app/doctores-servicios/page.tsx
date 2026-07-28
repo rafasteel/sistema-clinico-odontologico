@@ -99,20 +99,6 @@ const formularioServicioVacio: FormularioServicio = {
     descripcion: "",
 };
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
 function numero(valor: string) {
     const convertido = Number(valor || 0);
 
@@ -221,12 +207,12 @@ export default function DoctoresServiciosPage() {
         setErrorCarga("");
 
         try {
-            const usuarioGuardado = leerLocalStorage<UsuarioSistema | null>(
-                USUARIO_KEY,
-                null
-            );
+            const usuarioGuardado =
+                typeof window !== "undefined" ? localStorage.getItem(USUARIO_KEY) : null;
 
-            setUsuario(usuarioGuardado);
+            setUsuario(
+                usuarioGuardado ? (JSON.parse(usuarioGuardado) as UsuarioSistema) : null
+            );
 
             const [doctoresSupabase, serviciosSupabase] = await Promise.all([
                 listarDoctoresSupabase(),
@@ -823,8 +809,8 @@ export default function DoctoresServiciosPage() {
                                     setEstadoFiltro("Todos");
                                 }}
                                 className={`rounded-xl px-5 py-3 text-[12px] font-black ${vistaActiva === vista
-                                        ? "bg-slate-900 text-white shadow-sm"
-                                        : "text-slate-500 hover:bg-white"
+                                    ? "bg-slate-900 text-white shadow-sm"
+                                    : "text-slate-500 hover:bg-white"
                                     }`}
                             >
                                 {vista}

@@ -3,12 +3,62 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, FileText, Printer, Stethoscope, WalletCards } from "lucide-react";
+import {
+    AlertTriangle,
+    ArrowLeft,
+    FileText,
+    Paperclip,
+    Printer,
+    RefreshCcw,
+    Stethoscope,
+    WalletCards,
+} from "lucide-react";
 import {
     ConfiguracionClinica,
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    obtenerPacienteSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
+import {
+    listarNotasClinicasPacienteSupabase,
+    listarRecetasPacienteSupabase,
+    listarTratamientosPacienteSupabase,
+    type NotaClinicaSupabase,
+    type RecetaSupabase,
+    type TratamientoSupabase,
+} from "@/lib/supabase/perfilPaciente";
+import {
+    listarCitasPacienteSupabase,
+    type CitaSupabase,
+    type EstadoCitaSupabase,
+} from "@/lib/supabase/citas";
+import {
+    obtenerOdontogramaSupabase,
+    type CaraDentalSupabase,
+    type EstadoDentalSupabase,
+    type OdontogramaPacienteSupabase,
+    type PiezaDentalSupabase,
+} from "@/lib/supabase/odontograma";
+import {
+    listarPresupuestosPacienteSupabase,
+    type PresupuestoSupabase,
+} from "@/lib/supabase/presupuestos";
+import {
+    listarCuentasPacienteSupabase,
+    listarVentasPacienteSupabase,
+    type CuentaCobrarSupabase,
+    type EstadoCuentaCobrarSupabase,
+    type EstadoVentaSupabase,
+    type VentaSupabase,
+} from "@/lib/supabase/finanzas";
+import {
+    listarDocumentosPacienteSupabase,
+    type DocumentoPacienteSupabase,
+} from "@/lib/supabase/documentosPacientes";
 
 type Paciente = {
     id: string;
@@ -58,14 +108,7 @@ type Receta = {
     doctorNombre?: string;
 };
 
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cancelada"
-    | "Cobrada";
+type EstadoCita = EstadoCitaSupabase;
 
 type Cita = {
     id: string;
@@ -83,52 +126,10 @@ type Cita = {
     observaciones: string;
 };
 
-type CaraDental = "sup" | "der" | "inf" | "izq" | "centro";
-
-type EstadoDental =
-    | "Sano"
-    | "Caries"
-    | "Resina"
-    | "Corona"
-    | "Ausente"
-    | "Extracción"
-    | "Endodoncia"
-    | "Implante"
-    | "Fractura"
-    | "Sellante"
-    | "Observación";
-
-type CarasDentales = Record<CaraDental, EstadoDental>;
-
-type PiezaDental = {
-    codigo: string;
-    numeroLegacy?: number;
-    nombre?: string;
-    tipo?: string;
-    arcada?: string;
-    cuadrante?: string;
-    caras: CarasDentales;
-    nota?: string;
-    actualizadoEn?: string;
-};
-
-type HistorialOdontograma = {
-    id: string;
-    fecha: string;
-    hora: string;
-    piezaCodigo: string;
-    cara: CaraDental | "todas";
-    estado: EstadoDental;
-    nota: string;
-    usuarioNombre: string;
-};
-
-type OdontogramaPaciente = {
-    pacienteId: string;
-    actualizadoEn: string;
-    piezas: PiezaDental[];
-    historial?: HistorialOdontograma[];
-};
+type CaraDental = CaraDentalSupabase;
+type EstadoDental = EstadoDentalSupabase;
+type OdontogramaPaciente = OdontogramaPacienteSupabase;
+type PiezaDental = PiezaDentalSupabase;
 
 type EstadoPresupuesto =
     | "Pendiente"
@@ -140,8 +141,8 @@ type ItemPresupuesto = {
     id: string;
     piezaCodigo?: string;
     piezaNumero?: string;
-    cara?: CaraDental;
-    estadoDental?: EstadoDental;
+    cara?: CaraDental | null;
+    estadoDental?: EstadoDental | null;
     nombre: string;
     tratamiento?: string;
     descripcion: string;
@@ -166,14 +167,14 @@ type Presupuesto = {
     observaciones: string;
     origen?: "Manual" | "Odontograma" | string;
     piezaCodigo?: string;
-    cara?: CaraDental;
-    estadoDental?: EstadoDental;
+    cara?: CaraDental | null;
+    estadoDental?: EstadoDental | null;
     usuarioNombre?: string;
     items?: ItemPresupuesto[];
     tratamientos?: ItemPresupuesto[];
 };
 
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
+type EstadoVenta = EstadoVentaSupabase;
 
 type Venta = {
     id: string;
@@ -194,9 +195,9 @@ type Venta = {
     observaciones: string;
 };
 
-type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia";
+type MetodoPago = "Efectivo" | "Tarjeta" | "Transferencia" | "Mixto";
 
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
+type EstadoCuenta = EstadoCuentaCobrarSupabase;
 
 type AbonoCuenta = {
     id: string;
@@ -222,15 +223,19 @@ type CuentaPorCobrar = {
     abonos?: AbonoCuenta[];
 };
 
-const PACIENTES_KEY = "pacientes_sistema_clinico";
-const NOTAS_KEY = "notas_clinicas_sistema_clinico";
-const TRATAMIENTOS_KEY = "tratamientos_sistema_clinico";
-const RECETAS_KEY = "recetas_sistema_clinico";
-const CITAS_KEY = "citas_sistema_clinico";
-const ODONTOGRAMAS_KEY = "odontogramas_sistema_clinico";
-const PRESUPUESTOS_KEY = "presupuestos_sistema_clinico";
-const VENTAS_KEY = "ventas_sistema_clinico";
-const CUENTAS_KEY = "cuentas_cobrar_sistema_clinico";
+type DocumentoPaciente = {
+    id: string;
+    pacienteId: string;
+    pacienteNombre: string;
+    fecha: string;
+    hora: string;
+    nombreArchivo: string;
+    tipoArchivo: string;
+    tamanoBytes: number;
+    categoria: string;
+    descripcion: string;
+    usuarioNombre: string;
+};
 
 const carasLabels: Record<CaraDental, string> = {
     sup: "Superior",
@@ -247,19 +252,6 @@ function fechaHoyLocal() {
     const day = String(fecha.getDate()).padStart(2, "0");
 
     return `${year}-${month}-${day}`;
-}
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
 }
 
 function numero(valor: unknown) {
@@ -289,7 +281,7 @@ function fechaLegible(fecha: string) {
 function calcularEdad(fechaNacimiento: string) {
     if (!fechaNacimiento) return "No registrada";
 
-    const nacimiento = new Date(fechaNacimiento);
+    const nacimiento = new Date(`${fechaNacimiento}T12:00:00`);
     const hoy = new Date();
 
     if (Number.isNaN(nacimiento.getTime())) return "No registrada";
@@ -322,25 +314,6 @@ function obtenerEstadoCuenta(cuenta: CuentaPorCobrar): EstadoCuenta {
     return "Pendiente";
 }
 
-function obtenerOdontogramas(): OdontogramaPaciente[] {
-    const datos = leerLocalStorage<unknown>(ODONTOGRAMAS_KEY, []);
-
-    if (Array.isArray(datos)) {
-        return datos as OdontogramaPaciente[];
-    }
-
-    if (datos && typeof datos === "object") {
-        return Object.entries(datos as Record<string, OdontogramaPaciente>).map(
-            ([pacienteId, odontograma]) => ({
-                ...odontograma,
-                pacienteId: odontograma.pacienteId || pacienteId,
-            })
-        );
-    }
-
-    return [];
-}
-
 function obtenerItemsPresupuesto(presupuesto: Presupuesto) {
     const fuente =
         presupuesto.items && presupuesto.items.length > 0
@@ -366,6 +339,189 @@ function textoHallazgosPieza(pieza: PiezaDental) {
         .join(" · ");
 }
 
+function formatoTamano(bytes: number) {
+    if (!bytes) return "0 KB";
+
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+
+    const mb = kb / 1024;
+    return `${mb.toFixed(2)} MB`;
+}
+
+function convertirPaciente(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "",
+        enfermedades:
+            paciente.enfermedades_sistemicas ||
+            paciente.antecedentes ||
+            "",
+        medicamentos: paciente.medicamentos_actuales || "",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
+}
+
+function convertirNota(nota: NotaClinicaSupabase): NotaClinica {
+    return {
+        id: nota.id,
+        pacienteId: nota.paciente_id,
+        fecha: nota.fecha,
+        hora: String(nota.hora || "").slice(0, 5),
+        motivo: nota.servicio_nombre || "Nota clínica",
+        diagnostico: nota.diagnostico || "",
+        tratamiento: nota.procedimiento || "",
+        observaciones: nota.observaciones || "",
+        usuarioNombre: nota.doctor_nombre || "Usuario no identificado",
+    };
+}
+
+function convertirTratamiento(tratamiento: TratamientoSupabase): Tratamiento {
+    return {
+        id: tratamiento.id,
+        pacienteId: tratamiento.paciente_id,
+        fecha: tratamiento.fecha,
+        nombre: tratamiento.nombre || "",
+        descripcion: tratamiento.descripcion || "",
+        total: numero(tratamiento.total),
+        abonado: numero(tratamiento.abonado),
+        estado: tratamiento.estado || "Planificado",
+    };
+}
+
+function convertirReceta(receta: RecetaSupabase): Receta {
+    return {
+        id: receta.id,
+        pacienteId: receta.paciente_id,
+        fecha: receta.fecha,
+        medicamento: receta.medicamento || "",
+        indicaciones: receta.indicaciones || "",
+        doctorNombre: receta.doctor_nombre || "Doctor no especificado",
+    };
+}
+
+function convertirCita(cita: CitaSupabase): Cita {
+    return {
+        id: cita.id,
+        pacienteId: cita.paciente_id || "",
+        pacienteNombre: cita.paciente_nombre || "",
+        doctorId: cita.doctor_id || "",
+        doctorNombre: cita.doctor_nombre || "",
+        servicioId: cita.servicio_id || "",
+        servicioNombre: cita.servicio_nombre || "",
+        fecha: cita.fecha,
+        hora: String(cita.hora || "").slice(0, 5),
+        duracionMinutos: numero(cita.duracion_minutos),
+        precio: numero(cita.costo),
+        estado: cita.estado,
+        observaciones: cita.observaciones || "",
+    };
+}
+
+function convertirItemPresupuesto(item: PresupuestoSupabase["items"][number]): ItemPresupuesto {
+    return {
+        id: item.id,
+        piezaCodigo: item.pieza_codigo || "",
+        piezaNumero: item.pieza_numero || item.pieza_codigo || "",
+        cara: item.cara,
+        estadoDental: item.estado_dental,
+        nombre: item.nombre || item.tratamiento || "Tratamiento odontológico",
+        tratamiento: item.tratamiento || item.nombre || "Tratamiento odontológico",
+        descripcion: item.descripcion || "",
+        cantidad: numero(item.cantidad),
+        precioUnitario: numero(item.precio_unitario),
+        precio: numero(item.precio),
+        subtotal: numero(item.subtotal),
+        total: numero(item.total),
+        estado: item.estado || "Pendiente",
+    };
+}
+
+function convertirPresupuesto(presupuesto: PresupuestoSupabase): Presupuesto {
+    const items = (presupuesto.items || []).map(convertirItemPresupuesto);
+
+    return {
+        id: presupuesto.id,
+        pacienteId: presupuesto.paciente_id,
+        pacienteNombre: presupuesto.paciente_nombre || "",
+        fecha: presupuesto.fecha,
+        hora: String(presupuesto.hora || "").slice(0, 5),
+        estado: presupuesto.estado,
+        subtotal: numero(presupuesto.subtotal),
+        descuento: numero(presupuesto.descuento),
+        total: numero(presupuesto.total),
+        observaciones: presupuesto.observaciones || "",
+        origen: presupuesto.origen || "Manual",
+        piezaCodigo: presupuesto.pieza_codigo || "",
+        cara: presupuesto.cara,
+        estadoDental: presupuesto.estado_dental,
+        usuarioNombre: presupuesto.usuario_nombre || "",
+        items,
+        tratamientos: items,
+    };
+}
+
+function convertirVenta(venta: VentaSupabase): Venta {
+    return {
+        id: venta.id,
+        fecha: venta.fecha,
+        hora: String(venta.hora || "").slice(0, 5),
+        tipoCobro: venta.tipo_cobro || "Venta",
+        citaId: venta.cita_id || "",
+        pacienteId: venta.paciente_id || "",
+        clienteNombre: venta.cliente_nombre || "",
+        concepto: venta.concepto || "",
+        total: numero(venta.total),
+        efectivo: numero(venta.efectivo),
+        tarjeta: numero(venta.tarjeta),
+        transferencia: numero(venta.transferencia),
+        credito: numero(venta.credito),
+        estado: venta.estado,
+        usuarioNombre: venta.usuario_nombre || "",
+        observaciones: venta.observaciones || "",
+    };
+}
+
+function convertirCuenta(cuenta: CuentaCobrarSupabase): CuentaPorCobrar {
+    return {
+        id: cuenta.id,
+        ventaId: cuenta.venta_id || "",
+        pacienteId: cuenta.paciente_id || "",
+        pacienteNombre: cuenta.paciente_nombre || "",
+        concepto: cuenta.concepto || "",
+        total: numero(cuenta.total),
+        saldo: numero(cuenta.saldo),
+        fecha: cuenta.fecha,
+        fechaVencimiento: cuenta.fecha_vencimiento || "",
+        estado: cuenta.estado,
+        abonos: [],
+    };
+}
+
+function convertirDocumento(documento: DocumentoPacienteSupabase): DocumentoPaciente {
+    return {
+        id: documento.id,
+        pacienteId: documento.paciente_id,
+        pacienteNombre: documento.paciente_nombre || "",
+        fecha: documento.fecha,
+        hora: String(documento.hora || "").slice(0, 5),
+        nombreArchivo: documento.nombre_archivo || "",
+        tipoArchivo: documento.tipo_archivo || "",
+        tamanoBytes: numero(documento.tamano_bytes),
+        categoria: documento.categoria || "Otro",
+        descripcion: documento.descripcion || "",
+        usuarioNombre: documento.usuario_nombre || "Usuario no identificado",
+    };
+}
+
 export default function ExpedientePacientePage() {
     const params = useParams();
     const pacienteId = String(params.id || "");
@@ -378,113 +534,128 @@ export default function ExpedientePacientePage() {
     const [tratamientos, setTratamientos] = useState<Tratamiento[]>([]);
     const [recetas, setRecetas] = useState<Receta[]>([]);
     const [citas, setCitas] = useState<Cita[]>([]);
-    const [odontogramas, setOdontogramas] = useState<OdontogramaPaciente[]>([]);
+    const [odontograma, setOdontograma] = useState<OdontogramaPaciente | null>(null);
     const [presupuestos, setPresupuestos] = useState<Presupuesto[]>([]);
     const [ventas, setVentas] = useState<Venta[]>([]);
     const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([]);
+    const [documentos, setDocumentos] = useState<DocumentoPaciente[]>([]);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const [
+                pacienteSupabase,
+                notasSupabase,
+                tratamientosSupabase,
+                recetasSupabase,
+                citasSupabase,
+                odontogramaSupabase,
+                presupuestosSupabase,
+                ventasSupabase,
+                cuentasSupabase,
+                documentosSupabase,
+            ] = await Promise.all([
+                obtenerPacienteSupabase(pacienteId),
+                listarNotasClinicasPacienteSupabase(pacienteId),
+                listarTratamientosPacienteSupabase(pacienteId),
+                listarRecetasPacienteSupabase(pacienteId),
+                listarCitasPacienteSupabase(pacienteId),
+                obtenerOdontogramaSupabase(pacienteId),
+                listarPresupuestosPacienteSupabase(pacienteId),
+                listarVentasPacienteSupabase(pacienteId),
+                listarCuentasPacienteSupabase(pacienteId),
+                listarDocumentosPacienteSupabase(pacienteId),
+            ]);
+
+            setPaciente(pacienteSupabase ? convertirPaciente(pacienteSupabase) : null);
+            setNotas(notasSupabase.map(convertirNota));
+            setTratamientos(tratamientosSupabase.map(convertirTratamiento));
+            setRecetas(recetasSupabase.map(convertirReceta));
+            setCitas(citasSupabase.map(convertirCita));
+            setOdontograma(odontogramaSupabase);
+            setPresupuestos(presupuestosSupabase.map(convertirPresupuesto));
+            setVentas(ventasSupabase.map(convertirVenta));
+            setCuentas(cuentasSupabase.map(convertirCuenta));
+            setDocumentos(documentosSupabase.map(convertirDocumento));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el expediente desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const pacientes = leerLocalStorage<Paciente[]>(PACIENTES_KEY, []);
-
-        setConfiguracion(obtenerConfiguracionClinica());
-        setPaciente(pacientes.find((item) => item.id === pacienteId) || null);
-        setNotas(leerLocalStorage<NotaClinica[]>(NOTAS_KEY, []));
-        setTratamientos(leerLocalStorage<Tratamiento[]>(TRATAMIENTOS_KEY, []));
-        setRecetas(leerLocalStorage<Receta[]>(RECETAS_KEY, []));
-        setCitas(leerLocalStorage<Cita[]>(CITAS_KEY, []));
-        setOdontogramas(obtenerOdontogramas());
-        setPresupuestos(leerLocalStorage<Presupuesto[]>(PRESUPUESTOS_KEY, []));
-        setVentas(leerLocalStorage<Venta[]>(VENTAS_KEY, []));
-        setCuentas(leerLocalStorage<CuentaPorCobrar[]>(CUENTAS_KEY, []));
+        cargarDatos();
     }, [pacienteId]);
 
     const notasPaciente = useMemo(() => {
-        return notas
-            .filter((item) => item.pacienteId === pacienteId)
-            .sort((a, b) =>
-                `${b.fecha} ${b.hora || "00:00"}`.localeCompare(
-                    `${a.fecha} ${a.hora || "00:00"}`
-                )
-            );
-    }, [notas, pacienteId]);
+        return notas.sort((a, b) =>
+            `${b.fecha} ${b.hora || "00:00"}`.localeCompare(
+                `${a.fecha} ${a.hora || "00:00"}`
+            )
+        );
+    }, [notas]);
 
     const tratamientosPaciente = useMemo(() => {
-        return tratamientos
-            .filter((item) => item.pacienteId === pacienteId)
-            .sort((a, b) => b.fecha.localeCompare(a.fecha));
-    }, [tratamientos, pacienteId]);
+        return tratamientos.sort((a, b) => b.fecha.localeCompare(a.fecha));
+    }, [tratamientos]);
 
     const recetasPaciente = useMemo(() => {
-        return recetas
-            .filter((item) => item.pacienteId === pacienteId)
-            .sort((a, b) => b.fecha.localeCompare(a.fecha));
-    }, [recetas, pacienteId]);
+        return recetas.sort((a, b) => b.fecha.localeCompare(a.fecha));
+    }, [recetas]);
 
     const citasPaciente = useMemo(() => {
-        return citas
-            .filter(
-                (item) =>
-                    item.pacienteId === pacienteId ||
-                    item.pacienteNombre?.toLowerCase() ===
-                    (paciente?.nombre || "").toLowerCase()
-            )
-            .sort((a, b) =>
-                `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`)
-            );
-    }, [citas, pacienteId, paciente]);
-
-    const odontogramaPaciente = useMemo(() => {
-        return (
-            odontogramas.find((item) => item.pacienteId === pacienteId) || null
+        return citas.sort((a, b) =>
+            `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`)
         );
-    }, [odontogramas, pacienteId]);
+    }, [citas]);
 
     const piezasConHallazgos = useMemo(() => {
-        if (!odontogramaPaciente) return [];
+        if (!odontograma) return [];
 
-        return (odontogramaPaciente.piezas || []).filter((pieza) =>
+        return (odontograma.piezas || []).filter((pieza) =>
             Object.values(pieza.caras || {}).some((estado) => estado !== "Sano")
         );
-    }, [odontogramaPaciente]);
+    }, [odontograma]);
 
     const presupuestosPaciente = useMemo(() => {
-        return presupuestos
-            .filter(
-                (item) =>
-                    item.pacienteId === pacienteId ||
-                    item.pacienteNombre?.toLowerCase() ===
-                    (paciente?.nombre || "").toLowerCase()
+        return presupuestos.sort((a, b) =>
+            `${b.fecha} ${b.hora || "00:00"}`.localeCompare(
+                `${a.fecha} ${a.hora || "00:00"}`
             )
-            .sort((a, b) =>
-                `${b.fecha} ${b.hora || "00:00"}`.localeCompare(
-                    `${a.fecha} ${a.hora || "00:00"}`
-                )
-            );
-    }, [presupuestos, pacienteId, paciente]);
+        );
+    }, [presupuestos]);
 
     const ventasPaciente = useMemo(() => {
-        return ventas
-            .filter(
-                (item) =>
-                    item.pacienteId === pacienteId ||
-                    item.clienteNombre?.toLowerCase() ===
-                    (paciente?.nombre || "").toLowerCase()
-            )
-            .sort((a, b) =>
-                `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`)
-            );
-    }, [ventas, pacienteId, paciente]);
+        return ventas.sort((a, b) =>
+            `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`)
+        );
+    }, [ventas]);
 
     const cuentasPaciente = useMemo(() => {
-        return cuentas
-            .filter(
-                (item) =>
-                    item.pacienteId === pacienteId ||
-                    item.pacienteNombre?.toLowerCase() ===
-                    (paciente?.nombre || "").toLowerCase()
-            )
-            .sort((a, b) => b.fecha.localeCompare(a.fecha));
-    }, [cuentas, pacienteId, paciente]);
+        return cuentas.sort((a, b) => b.fecha.localeCompare(a.fecha));
+    }, [cuentas]);
+
+    const documentosPaciente = useMemo(() => {
+        return documentos.sort((a, b) =>
+            `${b.fecha} ${b.hora}`.localeCompare(`${a.fecha} ${a.hora}`)
+        );
+    }, [documentos]);
 
     const totalTratamientos = tratamientosPaciente.reduce(
         (total, item) => total + numero(item.total),
@@ -510,7 +681,7 @@ export default function ExpedientePacientePage() {
         window.print();
     }
 
-    if (!paciente) {
+    if (!paciente && !cargando) {
         return (
             <main className="min-h-screen bg-slate-100 p-6">
                 <section className="mx-auto max-w-3xl rounded-3xl bg-white p-10 text-center shadow-sm">
@@ -523,16 +694,27 @@ export default function ExpedientePacientePage() {
                     </h1>
 
                     <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                        No encontramos el paciente solicitado para generar el expediente.
+                        {error || "No encontramos el paciente solicitado para generar el expediente."}
                     </p>
 
-                    <Link
-                        href="/pacientes"
-                        className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        Volver a pacientes
-                    </Link>
+                    <div className="mt-6 flex flex-wrap justify-center gap-2">
+                        <Link
+                            href="/pacientes"
+                            className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                            Volver a pacientes
+                        </Link>
+
+                        <button
+                            type="button"
+                            onClick={cargarDatos}
+                            className="inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                        >
+                            <RefreshCcw className="h-4 w-4" />
+                            Recargar
+                        </button>
+                    </div>
                 </section>
             </main>
         );
@@ -618,9 +800,39 @@ export default function ExpedientePacientePage() {
                 }
             `}</style>
 
+            {error && (
+                <section className="no-print mx-auto mb-4 max-w-5xl rounded-2xl border border-red-100 bg-red-50 p-4 text-red-700">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                        <p className="text-sm font-bold">{error}</p>
+                    </div>
+                </section>
+            )}
+
+            <section className="no-print mx-auto mb-4 flex max-w-5xl flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Expediente conectado a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Integra paciente, notas, tratamientos, recetas, citas, odontograma, presupuestos, documentos y finanzas reales.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar"}
+                </button>
+            </section>
+
             <section className="no-print mx-auto mb-4 flex max-w-5xl flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <Link
-                    href={`/pacientes/${paciente.id}`}
+                    href={`/pacientes/${paciente?.id || pacienteId}`}
                     className="flex w-fit items-center gap-2 rounded-xl bg-white px-4 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
                 >
                     <ArrowLeft className="h-4 w-4" />
@@ -629,7 +841,7 @@ export default function ExpedientePacientePage() {
 
                 <div className="flex flex-wrap gap-2">
                     <Link
-                        href={`/pacientes/${paciente.id}/odontograma`}
+                        href={`/pacientes/${paciente?.id || pacienteId}/odontograma`}
                         className="flex items-center gap-2 rounded-xl bg-teal-50 px-4 py-3 text-[12px] font-bold text-teal-700 hover:bg-teal-100"
                     >
                         <Stethoscope className="h-4 w-4" />
@@ -637,7 +849,15 @@ export default function ExpedientePacientePage() {
                     </Link>
 
                     <Link
-                        href={`/estado-cuenta/${paciente.id}`}
+                        href={`/pacientes/${paciente?.id || pacienteId}/documentos`}
+                        className="flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-3 text-[12px] font-bold text-blue-700 hover:bg-blue-100"
+                    >
+                        <Paperclip className="h-4 w-4" />
+                        Documentos
+                    </Link>
+
+                    <Link
+                        href={`/estado-cuenta/${paciente?.id || pacienteId}`}
                         className="flex items-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-[12px] font-bold text-amber-700 hover:bg-amber-100"
                     >
                         <WalletCards className="h-4 w-4" />
@@ -655,401 +875,192 @@ export default function ExpedientePacientePage() {
                 </div>
             </section>
 
-            <section className="print-document screen-card mx-auto max-w-5xl rounded-2xl border border-slate-300 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.10)]">
-                <header className="print-section border-b-2 border-slate-900 pb-3">
-                    <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                        <div>
-                            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
-                                {configuracion.nombreClinica}
+            {!paciente && cargando ? (
+                <section className="mx-auto max-w-5xl rounded-3xl bg-white p-10 text-center shadow-sm">
+                    <RefreshCcw className="mx-auto h-10 w-10 animate-spin text-slate-300" />
+                    <h1 className="mt-5 text-2xl font-black text-slate-900">
+                        Cargando expediente...
+                    </h1>
+                    <p className="mt-2 text-sm text-slate-500">
+                        Consultando la información clínica desde Supabase.
+                    </p>
+                </section>
+            ) : (
+                <section className="print-document screen-card mx-auto max-w-5xl rounded-2xl border border-slate-300 bg-white p-5 shadow-[0_18px_50px_rgba(15,23,42,0.10)]">
+                    <header className="print-section border-b-2 border-slate-900 pb-3">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div>
+                                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">
+                                    {configuracion.nombreClinica}
+                                </p>
+
+                                <h1 className="print-title mt-1 text-2xl font-black uppercase tracking-tight text-slate-950">
+                                    Expediente clínico odontológico
+                                </h1>
+
+                                <div className="print-small mt-1 max-w-2xl text-[11px] leading-4 text-slate-700">
+                                    <p>
+                                        {configuracion.direccion || "Dirección no registrada"}
+                                    </p>
+                                    <p>
+                                        Tel: {configuracion.telefono || "No registrado"} · WhatsApp:{" "}
+                                        {configuracion.whatsapp || "No registrado"} · RUC:{" "}
+                                        {configuracion.ruc || "No registrado"}
+                                    </p>
+                                    {configuracion.correo && (
+                                        <p>Correo: {configuracion.correo}</p>
+                                    )}
+                                </div>
+                            </div>
+
+                            <div className="rounded-xl border border-slate-400 text-[11px] md:w-[250px] print-border">
+                                <div className="flex justify-between gap-3 border-b border-slate-300 px-3 py-1 print-border">
+                                    <span className="font-bold text-slate-500">Emisión</span>
+                                    <strong>{fechaLegible(fechaHoyLocal())}</strong>
+                                </div>
+
+                                <div className="flex justify-between gap-3 border-b border-slate-300 px-3 py-1 print-border">
+                                    <span className="font-bold text-slate-500">Estado</span>
+                                    <strong>{paciente?.estado || "Activo"}</strong>
+                                </div>
+
+                                <div className="flex justify-between gap-3 border-b border-slate-300 px-3 py-1 print-border">
+                                    <span className="font-bold text-slate-500">Notas</span>
+                                    <strong>{notasPaciente.length}</strong>
+                                </div>
+
+                                <div className="flex justify-between gap-3 px-3 py-1">
+                                    <span className="font-bold text-slate-500">Citas atendidas</span>
+                                    <strong>{citasAtendidas}</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+
+                    <section className="print-section border-b border-slate-300 py-3 print-border">
+                        <h2 className="mb-2 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                            Datos del paciente
+                        </h2>
+
+                        <div className="grid overflow-hidden rounded-xl border border-slate-400 md:grid-cols-[1.45fr_1fr_0.8fr_1fr_2fr] print:rounded-none print-border">
+                            <div className="border-b border-r border-slate-300 p-2 print-border md:border-b-0">
+                                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                    Paciente
+                                </p>
+                                <p className="mt-0.5 text-sm font-black text-slate-950">
+                                    {paciente?.nombre}
+                                </p>
+                            </div>
+
+                            <div className="border-b border-r border-slate-300 p-2 print-border md:border-b-0">
+                                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                    Cédula
+                                </p>
+                                <p className="mt-0.5 text-xs font-bold text-slate-800">
+                                    {paciente?.cedula || "No registrada"}
+                                </p>
+                            </div>
+
+                            <div className="border-b border-r border-slate-300 p-2 print-border md:border-b-0">
+                                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                    Edad
+                                </p>
+                                <p className="mt-0.5 text-xs font-bold text-slate-800">
+                                    {calcularEdad(paciente?.fechaNacimiento || "")}
+                                </p>
+                            </div>
+
+                            <div className="border-b border-r border-slate-300 p-2 print-border md:border-b-0">
+                                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                    Teléfono
+                                </p>
+                                <p className="mt-0.5 text-xs font-bold text-slate-800">
+                                    {paciente?.telefono || "No registrado"}
+                                </p>
+                            </div>
+
+                            <div className="p-2">
+                                <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                    Dirección
+                                </p>
+                                <p className="mt-0.5 text-xs font-bold text-slate-800">
+                                    {paciente?.direccion || "No registrada"}
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
+                    {(paciente?.alergias || paciente?.enfermedades || paciente?.medicamentos) && (
+                        <section className="print-section border-b border-slate-300 py-2 print-border">
+                            <h2 className="mb-1 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                                Alertas clínicas
+                            </h2>
+
+                            <p className="print-small text-[11px] leading-4 text-slate-700">
+                                <strong>Alergias:</strong> {paciente?.alergias || "No refiere"} ·{" "}
+                                <strong>Enfermedades:</strong>{" "}
+                                {paciente?.enfermedades || "No registra"} ·{" "}
+                                <strong>Medicamentos:</strong>{" "}
+                                {paciente?.medicamentos || "Ninguno"}
                             </p>
+                        </section>
+                    )}
 
-                            <h1 className="print-title mt-1 text-2xl font-black uppercase tracking-tight text-slate-950">
-                                Expediente clínico odontológico
-                            </h1>
-
-                            <div className="print-small mt-1 max-w-2xl text-[11px] leading-4 text-slate-700">
-                                <p>
-                                    {configuracion.direccion || "Dirección no registrada"}
-                                </p>
-                                <p>
-                                    Tel: {configuracion.telefono || "No registrado"} · WhatsApp:{" "}
-                                    {configuracion.whatsapp || "No registrado"} · RUC:{" "}
-                                    {configuracion.ruc || "No registrado"}
-                                </p>
-                                {configuracion.correo && (
-                                    <p>Correo: {configuracion.correo}</p>
-                                )}
-                            </div>
-                        </div>
-
-                        <div className="rounded-xl border border-slate-400 text-[11px] md:w-[250px] print-border">
-                            <div className="flex justify-between gap-3 border-b border-slate-300 px-3 py-1 print-border">
-                                <span className="font-bold text-slate-500">Emisión</span>
-                                <strong>{fechaLegible(fechaHoyLocal())}</strong>
-                            </div>
-
-                            <div className="flex justify-between gap-3 border-b border-slate-300 px-3 py-1 print-border">
-                                <span className="font-bold text-slate-500">Estado</span>
-                                <strong>{paciente.estado}</strong>
-                            </div>
-
-                            <div className="flex justify-between gap-3 border-b border-slate-300 px-3 py-1 print-border">
-                                <span className="font-bold text-slate-500">Notas</span>
-                                <strong>{notasPaciente.length}</strong>
-                            </div>
-
-                            <div className="flex justify-between gap-3 px-3 py-1">
-                                <span className="font-bold text-slate-500">Citas atendidas</span>
-                                <strong>{citasAtendidas}</strong>
-                            </div>
-                        </div>
-                    </div>
-                </header>
-
-                <section className="print-section border-b border-slate-300 py-3 print-border">
-                    <h2 className="mb-2 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                        Datos del paciente
-                    </h2>
-
-                    <div className="grid overflow-hidden rounded-xl border border-slate-400 md:grid-cols-[1.45fr_1fr_0.8fr_1fr_2fr] print:rounded-none print-border">
-                        <div className="border-b border-r border-slate-300 p-2 print-border md:border-b-0">
+                    <section className="print-section grid gap-3 border-b border-slate-300 py-3 md:grid-cols-5 print-border">
+                        <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
                             <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                                Paciente
+                                Citas atendidas
                             </p>
                             <p className="mt-0.5 text-sm font-black text-slate-950">
-                                {paciente.nombre}
+                                {citasAtendidas}
                             </p>
                         </div>
 
-                        <div className="border-b border-r border-slate-300 p-2 print-border md:border-b-0">
+                        <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
                             <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                                Cédula
+                                Hallazgos
                             </p>
-                            <p className="mt-0.5 text-xs font-bold text-slate-800">
-                                {paciente.cedula || "No registrada"}
-                            </p>
-                        </div>
-
-                        <div className="border-b border-r border-slate-300 p-2 print-border md:border-b-0">
-                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                                Edad
-                            </p>
-                            <p className="mt-0.5 text-xs font-bold text-slate-800">
-                                {calcularEdad(paciente.fechaNacimiento)}
-                            </p>
-                        </div>
-
-                        <div className="border-b border-r border-slate-300 p-2 print-border md:border-b-0">
-                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                                Teléfono
-                            </p>
-                            <p className="mt-0.5 text-xs font-bold text-slate-800">
-                                {paciente.telefono || "No registrado"}
-                            </p>
-                        </div>
-
-                        <div className="p-2">
-                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                                Dirección
-                            </p>
-                            <p className="mt-0.5 text-xs font-bold text-slate-800">
-                                {paciente.direccion || "No registrada"}
-                            </p>
-                        </div>
-                    </div>
-                </section>
-
-                {(paciente.alergias || paciente.enfermedades || paciente.medicamentos) && (
-                    <section className="print-section border-b border-slate-300 py-2 print-border">
-                        <h2 className="mb-1 text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                            Alertas clínicas
-                        </h2>
-
-                        <p className="print-small text-[11px] leading-4 text-slate-700">
-                            <strong>Alergias:</strong> {paciente.alergias || "No refiere"} ·{" "}
-                            <strong>Enfermedades:</strong>{" "}
-                            {paciente.enfermedades || "No registra"} ·{" "}
-                            <strong>Medicamentos:</strong>{" "}
-                            {paciente.medicamentos || "Ninguno"}
-                        </p>
-                    </section>
-                )}
-
-                <section className="print-section grid gap-3 border-b border-slate-300 py-3 md:grid-cols-4 print-border">
-                    <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
-                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                            Citas atendidas
-                        </p>
-                        <p className="mt-0.5 text-sm font-black text-slate-950">
-                            {citasAtendidas}
-                        </p>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
-                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                            Hallazgos
-                        </p>
-                        <p className="mt-0.5 text-sm font-black text-slate-950">
-                            {piezasConHallazgos.length}
-                        </p>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
-                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                            Facturado
-                        </p>
-                        <p className="mt-0.5 text-sm font-black text-slate-950">
-                            {formatoMoneda(totalFacturado, configuracion.simboloMoneda)}
-                        </p>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
-                        <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
-                            Pendiente
-                        </p>
-                        <p className="mt-0.5 text-sm font-black text-slate-950">
-                            {formatoMoneda(totalPendiente, configuracion.simboloMoneda)}
-                        </p>
-                    </div>
-                </section>
-
-                <section className="py-3 print:py-2">
-                    <div className="mb-2 flex items-center justify-between">
-                        <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                            Historial clínico
-                        </h2>
-
-                        <p className="text-[10px] font-bold text-slate-500">
-                            {notasPaciente.length} nota(s)
-                        </p>
-                    </div>
-
-                    <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
-                        <table className="print-table w-full border-collapse text-[10px]">
-                            <thead>
-                                <tr className="bg-slate-100 print-light-bg">
-                                    <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                        Fecha
-                                    </th>
-                                    <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                        Motivo
-                                    </th>
-                                    <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                        Diagnóstico
-                                    </th>
-                                    <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                        Tratamiento / observaciones
-                                    </th>
-                                </tr>
-                            </thead>
-
-                            <tbody>
-                                {notasPaciente.map((nota) => (
-                                    <tr key={nota.id}>
-                                        <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
-                                            {fechaLegible(nota.fecha)}
-                                            <br />
-                                            <span className="font-normal text-slate-500">
-                                                {nota.hora || "00:00"}
-                                            </span>
-                                        </td>
-
-                                        <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                            {nota.motivo || "No registrado"}
-                                        </td>
-
-                                        <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                            {nota.diagnostico || "No registrado"}
-                                        </td>
-
-                                        <td className="border-b border-slate-300 px-2 py-2 align-top print-border">
-                                            <p>
-                                                <strong>Trat.:</strong>{" "}
-                                                {nota.tratamiento || "No registrado"}
-                                            </p>
-                                            {nota.observaciones && (
-                                                <p className="print-small mt-0.5 text-[9px] leading-3 text-slate-600">
-                                                    {nota.observaciones}
-                                                </p>
-                                            )}
-                                            <p className="mt-0.5 text-[9px] text-slate-500">
-                                                {nota.usuarioNombre || "Usuario no identificado"}
-                                            </p>
-                                        </td>
-                                    </tr>
-                                ))}
-
-                                {notasPaciente.length === 0 && (
-                                    <tr>
-                                        <td
-                                            colSpan={4}
-                                            className="px-3 py-5 text-center text-sm text-slate-400"
-                                        >
-                                            No hay notas clínicas registradas.
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
-
-                <section className="grid gap-4 py-3 md:grid-cols-2 print:py-2">
-                    <div className="print-section">
-                        <div className="mb-2 flex items-center justify-between">
-                            <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                                Tratamientos
-                            </h2>
-
-                            <p className="text-[10px] font-bold text-slate-500">
-                                {tratamientosPaciente.length}
-                            </p>
-                        </div>
-
-                        <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
-                            <table className="print-table w-full border-collapse text-[10px]">
-                                <thead>
-                                    <tr className="bg-slate-100 print-light-bg">
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Fecha
-                                        </th>
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Tratamiento
-                                        </th>
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-center text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Estado
-                                        </th>
-                                        <th className="border-b border-slate-400 px-2 py-2 text-right text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Total
-                                        </th>
-                                    </tr>
-                                </thead>
-
-                                <tbody>
-                                    {tratamientosPaciente.map((tratamiento) => (
-                                        <tr key={tratamiento.id}>
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
-                                                {fechaLegible(tratamiento.fecha)}
-                                            </td>
-
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                                <p className="font-black">
-                                                    {tratamiento.nombre}
-                                                </p>
-                                                <p className="print-small mt-0.5 text-[9px] leading-3 text-slate-600">
-                                                    {tratamiento.descripcion}
-                                                </p>
-                                            </td>
-
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 text-center print-border">
-                                                {textoEstado(tratamiento.estado)}
-                                            </td>
-
-                                            <td className="border-b border-slate-300 px-2 py-2 text-right font-black print-border">
-                                                {formatoMoneda(
-                                                    tratamiento.total,
-                                                    configuracion.simboloMoneda
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))}
-
-                                    {tratamientosPaciente.length === 0 && (
-                                        <tr>
-                                            <td
-                                                colSpan={4}
-                                                className="px-3 py-5 text-center text-sm text-slate-400"
-                                            >
-                                                Sin tratamientos.
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-
-                        {tratamientosPaciente.length > 0 && (
-                            <p className="mt-1 text-right text-[10px] font-black text-slate-900">
-                                Total tratamientos:{" "}
-                                {formatoMoneda(totalTratamientos, configuracion.simboloMoneda)}
-                            </p>
-                        )}
-                    </div>
-
-                    <div className="print-section">
-                        <div className="mb-2 flex items-center justify-between">
-                            <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                                Odontograma / hallazgos
-                            </h2>
-
-                            <p className="text-[10px] font-bold text-slate-500">
+                            <p className="mt-0.5 text-sm font-black text-slate-950">
                                 {piezasConHallazgos.length}
                             </p>
                         </div>
 
-                        <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
-                            <table className="print-table w-full border-collapse text-[10px]">
-                                <thead>
-                                    <tr className="bg-slate-100 print-light-bg">
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Pieza
-                                        </th>
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Hallazgos
-                                        </th>
-                                        <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Nota
-                                        </th>
-                                    </tr>
-                                </thead>
-
-                                <tbody>
-                                    {piezasConHallazgos.map((pieza) => (
-                                        <tr key={pieza.codigo}>
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-black print-border">
-                                                {pieza.codigo}
-                                            </td>
-
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                                {textoHallazgosPieza(pieza)}
-                                            </td>
-
-                                            <td className="border-b border-slate-300 px-2 py-2 align-top print-border">
-                                                {pieza.nota || "Sin nota"}
-                                            </td>
-                                        </tr>
-                                    ))}
-
-                                    {piezasConHallazgos.length === 0 && (
-                                        <tr>
-                                            <td
-                                                colSpan={3}
-                                                className="px-3 py-5 text-center text-sm text-slate-400"
-                                            >
-                                                Sin hallazgos dentales.
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
+                        <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
+                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                Documentos
+                            </p>
+                            <p className="mt-0.5 text-sm font-black text-slate-950">
+                                {documentosPaciente.length}
+                            </p>
                         </div>
 
-                        <p className="mt-1 text-[10px] text-slate-500">
-                            Última actualización:{" "}
-                            {odontogramaPaciente?.actualizadoEn || "Sin odontograma"}
-                        </p>
-                    </div>
-                </section>
+                        <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
+                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                Facturado
+                            </p>
+                            <p className="mt-0.5 text-sm font-black text-slate-950">
+                                {formatoMoneda(totalFacturado, configuracion.simboloMoneda)}
+                            </p>
+                        </div>
 
-                <section className="grid gap-4 py-3 md:grid-cols-2 print:py-2">
-                    <div className="print-section">
+                        <div className="rounded-xl border border-slate-400 p-2 print:rounded-none print-border">
+                            <p className="text-[9px] font-black uppercase tracking-[0.12em] text-slate-500">
+                                Pendiente
+                            </p>
+                            <p className="mt-0.5 text-sm font-black text-slate-950">
+                                {formatoMoneda(totalPendiente, configuracion.simboloMoneda)}
+                            </p>
+                        </div>
+                    </section>
+
+                    <section className="py-3 print:py-2">
                         <div className="mb-2 flex items-center justify-between">
                             <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                                Recetas
+                                Historial clínico
                             </h2>
 
                             <p className="text-[10px] font-bold text-slate-500">
-                                {recetasPaciente.length}
+                                {notasPaciente.length} nota(s)
                             </p>
                         </div>
 
@@ -1061,372 +1072,672 @@ export default function ExpedientePacientePage() {
                                             Fecha
                                         </th>
                                         <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Medicamento
+                                            Motivo
+                                        </th>
+                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                            Diagnóstico
                                         </th>
                                         <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Indicaciones
+                                            Tratamiento / observaciones
                                         </th>
                                     </tr>
                                 </thead>
 
                                 <tbody>
-                                    {recetasPaciente.map((receta) => (
-                                        <tr key={receta.id}>
+                                    {notasPaciente.map((nota) => (
+                                        <tr key={nota.id}>
                                             <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
-                                                {fechaLegible(receta.fecha)}
+                                                {fechaLegible(nota.fecha)}
+                                                <br />
+                                                <span className="font-normal text-slate-500">
+                                                    {nota.hora || "00:00"}
+                                                </span>
                                             </td>
 
                                             <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                                {receta.medicamento}
-                                            </td>
-
-                                            <td className="border-b border-slate-300 px-2 py-2 align-top print-border">
-                                                {receta.indicaciones}
-                                                <p className="mt-0.5 text-[9px] text-slate-500">
-                                                    {receta.doctorNombre || "Doctor no especificado"}
-                                                </p>
-                                            </td>
-                                        </tr>
-                                    ))}
-
-                                    {recetasPaciente.length === 0 && (
-                                        <tr>
-                                            <td
-                                                colSpan={3}
-                                                className="px-3 py-5 text-center text-sm text-slate-400"
-                                            >
-                                                Sin recetas.
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-
-                    <div className="print-section">
-                        <div className="mb-2 flex items-center justify-between">
-                            <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                                Citas
-                            </h2>
-
-                            <p className="text-[10px] font-bold text-slate-500">
-                                {citasPaciente.length}
-                            </p>
-                        </div>
-
-                        <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
-                            <table className="print-table w-full border-collapse text-[10px]">
-                                <thead>
-                                    <tr className="bg-slate-100 print-light-bg">
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Fecha
-                                        </th>
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Servicio
-                                        </th>
-                                        <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Estado
-                                        </th>
-                                    </tr>
-                                </thead>
-
-                                <tbody>
-                                    {citasPaciente.map((cita) => (
-                                        <tr key={cita.id}>
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
-                                                {fechaLegible(cita.fecha)} · {cita.hora}
+                                                {nota.motivo || "No registrado"}
                                             </td>
 
                                             <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                                {cita.servicioNombre}
-                                                <p className="mt-0.5 text-[9px] text-slate-500">
-                                                    {cita.doctorNombre}
-                                                </p>
+                                                {nota.diagnostico || "No registrado"}
                                             </td>
 
                                             <td className="border-b border-slate-300 px-2 py-2 align-top print-border">
-                                                {textoEstado(cita.estado)}
-                                            </td>
-                                        </tr>
-                                    ))}
-
-                                    {citasPaciente.length === 0 && (
-                                        <tr>
-                                            <td
-                                                colSpan={3}
-                                                className="px-3 py-5 text-center text-sm text-slate-400"
-                                            >
-                                                Sin citas.
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </section>
-
-                <section className="grid gap-4 py-3 md:grid-cols-2 print:py-2">
-                    <div className="print-section">
-                        <div className="mb-2 flex items-center justify-between">
-                            <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                                Presupuestos
-                            </h2>
-
-                            <p className="text-[10px] font-bold text-slate-500">
-                                {presupuestosPaciente.length}
-                            </p>
-                        </div>
-
-                        <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
-                            <table className="print-table w-full border-collapse text-[10px]">
-                                <thead>
-                                    <tr className="bg-slate-100 print-light-bg">
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Fecha
-                                        </th>
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Presupuesto
-                                        </th>
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-center text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Estado
-                                        </th>
-                                        <th className="border-b border-slate-400 px-2 py-2 text-right text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Total
-                                        </th>
-                                    </tr>
-                                </thead>
-
-                                <tbody>
-                                    {presupuestosPaciente.map((presupuesto) => {
-                                        const items = obtenerItemsPresupuesto(presupuesto);
-
-                                        return (
-                                            <tr key={presupuesto.id}>
-                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
-                                                    {fechaLegible(presupuesto.fecha)}
-                                                </td>
-
-                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                                    <p className="font-black">
-                                                        {presupuesto.id}
-                                                    </p>
+                                                <p>
+                                                    <strong>Trat.:</strong>{" "}
+                                                    {nota.tratamiento || "No registrado"}
+                                                </p>
+                                                {nota.observaciones && (
                                                     <p className="print-small mt-0.5 text-[9px] leading-3 text-slate-600">
-                                                        {(items || [])
-                                                            .slice(0, 2)
-                                                            .map((item) => item.nombre)
-                                                            .join(", ") ||
-                                                            presupuesto.origen ||
-                                                            "Manual"}
+                                                        {nota.observaciones}
                                                     </p>
-                                                </td>
+                                                )}
+                                                <p className="mt-0.5 text-[9px] text-slate-500">
+                                                    {nota.usuarioNombre || "Usuario no identificado"}
+                                                </p>
+                                            </td>
+                                        </tr>
+                                    ))}
 
-                                                <td className="border-b border-r border-slate-300 px-2 py-2 text-center print-border">
-                                                    {textoEstado(presupuesto.estado)}
-                                                </td>
-
-                                                <td className="border-b border-slate-300 px-2 py-2 text-right font-black print-border">
-                                                    {formatoMoneda(
-                                                        presupuesto.total,
-                                                        configuracion.simboloMoneda
-                                                    )}
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-
-                                    {presupuestosPaciente.length === 0 && (
+                                    {notasPaciente.length === 0 && (
                                         <tr>
                                             <td
                                                 colSpan={4}
                                                 className="px-3 py-5 text-center text-sm text-slate-400"
                                             >
-                                                Sin presupuestos.
+                                                No hay notas clínicas registradas.
                                             </td>
                                         </tr>
                                     )}
                                 </tbody>
                             </table>
                         </div>
-                    </div>
+                    </section>
 
-                    <div className="print-section">
-                        <div className="mb-2 flex items-center justify-between">
-                            <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
-                                Ventas y cuentas
-                            </h2>
+                    <section className="grid gap-4 py-3 md:grid-cols-2 print:py-2">
+                        <div className="print-section">
+                            <div className="mb-2 flex items-center justify-between">
+                                <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                                    Tratamientos
+                                </h2>
 
-                            <p className="text-[10px] font-bold text-slate-500">
-                                {ventasPaciente.length} venta(s)
-                            </p>
-                        </div>
+                                <p className="text-[10px] font-bold text-slate-500">
+                                    {tratamientosPaciente.length}
+                                </p>
+                            </div>
 
-                        <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
-                            <table className="print-table w-full border-collapse text-[10px]">
-                                <thead>
-                                    <tr className="bg-slate-100 print-light-bg">
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Fecha
-                                        </th>
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Concepto
-                                        </th>
-                                        <th className="border-b border-r border-slate-400 px-2 py-2 text-center text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Estado
-                                        </th>
-                                        <th className="border-b border-slate-400 px-2 py-2 text-right text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
-                                            Total / saldo
-                                        </th>
-                                    </tr>
-                                </thead>
-
-                                <tbody>
-                                    {ventasPaciente.map((venta) => (
-                                        <tr key={venta.id}>
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
-                                                {fechaLegible(venta.fecha)}
-                                            </td>
-
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                                {venta.concepto}
-                                            </td>
-
-                                            <td className="border-b border-r border-slate-300 px-2 py-2 text-center print-border">
-                                                {textoEstado(venta.estado)}
-                                            </td>
-
-                                            <td className="border-b border-slate-300 px-2 py-2 text-right font-black print-border">
-                                                {formatoMoneda(
-                                                    venta.total,
-                                                    configuracion.simboloMoneda
-                                                )}
-                                            </td>
+                            <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
+                                <table className="print-table w-full border-collapse text-[10px]">
+                                    <thead>
+                                        <tr className="bg-slate-100 print-light-bg">
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Fecha
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Tratamiento
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-center text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Estado
+                                            </th>
+                                            <th className="border-b border-slate-400 px-2 py-2 text-right text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Total
+                                            </th>
                                         </tr>
-                                    ))}
+                                    </thead>
 
-                                    {cuentasPaciente.map((cuenta) => {
-                                        const estado = obtenerEstadoCuenta(cuenta);
-
-                                        return (
-                                            <tr key={cuenta.id}>
+                                    <tbody>
+                                        {tratamientosPaciente.map((tratamiento) => (
+                                            <tr key={tratamiento.id}>
                                                 <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
-                                                    {fechaLegible(cuenta.fecha)}
+                                                    {fechaLegible(tratamiento.fecha)}
                                                 </td>
 
                                                 <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
-                                                    <p>{cuenta.concepto}</p>
-                                                    <p className="text-[9px] text-slate-500">
-                                                        Cuenta: {cuenta.id}
+                                                    <p className="font-black">
+                                                        {tratamiento.nombre}
+                                                    </p>
+                                                    <p className="print-small mt-0.5 text-[9px] leading-3 text-slate-600">
+                                                        {tratamiento.descripcion}
                                                     </p>
                                                 </td>
 
                                                 <td className="border-b border-r border-slate-300 px-2 py-2 text-center print-border">
-                                                    {textoEstado(estado)}
+                                                    {textoEstado(tratamiento.estado)}
                                                 </td>
 
                                                 <td className="border-b border-slate-300 px-2 py-2 text-right font-black print-border">
                                                     {formatoMoneda(
-                                                        cuenta.saldo,
+                                                        tratamiento.total,
                                                         configuracion.simboloMoneda
                                                     )}
                                                 </td>
                                             </tr>
-                                        );
-                                    })}
+                                        ))}
 
-                                    {ventasPaciente.length === 0 &&
-                                        cuentasPaciente.length === 0 && (
+                                        {tratamientosPaciente.length === 0 && (
                                             <tr>
                                                 <td
                                                     colSpan={4}
                                                     className="px-3 py-5 text-center text-sm text-slate-400"
                                                 >
-                                                    Sin ventas ni cuentas.
+                                                    Sin tratamientos.
                                                 </td>
                                             </tr>
                                         )}
-                                </tbody>
-                            </table>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            {tratamientosPaciente.length > 0 && (
+                                <p className="mt-1 text-right text-[10px] font-black text-slate-900">
+                                    Total tratamientos:{" "}
+                                    {formatoMoneda(totalTratamientos, configuracion.simboloMoneda)}
+                                </p>
+                            )}
                         </div>
-                    </div>
-                </section>
 
-                <section className="print-section grid gap-3 border-t border-slate-300 pt-3 md:grid-cols-[1fr_270px] print-border print:pt-2">
-                    <div>
-                        <h3 className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
-                            Observaciones generales
-                        </h3>
+                        <div className="print-section">
+                            <div className="mb-2 flex items-center justify-between">
+                                <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                                    Odontograma / hallazgos
+                                </h2>
 
-                        <p className="print-small mt-1 text-[11px] leading-4 text-slate-700">
-                            {paciente.observaciones ||
-                                "No hay observaciones generales registradas."}
+                                <p className="text-[10px] font-bold text-slate-500">
+                                    {piezasConHallazgos.length}
+                                </p>
+                            </div>
+
+                            <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
+                                <table className="print-table w-full border-collapse text-[10px]">
+                                    <thead>
+                                        <tr className="bg-slate-100 print-light-bg">
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Pieza
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Hallazgos
+                                            </th>
+                                            <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Nota
+                                            </th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+                                        {piezasConHallazgos.map((pieza) => (
+                                            <tr key={pieza.codigo}>
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-black print-border">
+                                                    {pieza.codigo}
+                                                </td>
+
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
+                                                    {textoHallazgosPieza(pieza)}
+                                                </td>
+
+                                                <td className="border-b border-slate-300 px-2 py-2 align-top print-border">
+                                                    {pieza.nota || "Sin nota"}
+                                                </td>
+                                            </tr>
+                                        ))}
+
+                                        {piezasConHallazgos.length === 0 && (
+                                            <tr>
+                                                <td
+                                                    colSpan={3}
+                                                    className="px-3 py-5 text-center text-sm text-slate-400"
+                                                >
+                                                    Sin hallazgos dentales.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <p className="mt-1 text-[10px] text-slate-500">
+                                Última actualización:{" "}
+                                {odontograma?.actualizadoEn || "Sin odontograma"}
+                            </p>
+                        </div>
+                    </section>
+
+                    <section className="grid gap-4 py-3 md:grid-cols-2 print:py-2">
+                        <div className="print-section">
+                            <div className="mb-2 flex items-center justify-between">
+                                <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                                    Recetas
+                                </h2>
+
+                                <p className="text-[10px] font-bold text-slate-500">
+                                    {recetasPaciente.length}
+                                </p>
+                            </div>
+
+                            <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
+                                <table className="print-table w-full border-collapse text-[10px]">
+                                    <thead>
+                                        <tr className="bg-slate-100 print-light-bg">
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Fecha
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Medicamento
+                                            </th>
+                                            <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Indicaciones
+                                            </th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+                                        {recetasPaciente.map((receta) => (
+                                            <tr key={receta.id}>
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
+                                                    {fechaLegible(receta.fecha)}
+                                                </td>
+
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
+                                                    {receta.medicamento}
+                                                </td>
+
+                                                <td className="border-b border-slate-300 px-2 py-2 align-top print-border">
+                                                    {receta.indicaciones}
+                                                    <p className="mt-0.5 text-[9px] text-slate-500">
+                                                        {receta.doctorNombre || "Doctor no especificado"}
+                                                    </p>
+                                                </td>
+                                            </tr>
+                                        ))}
+
+                                        {recetasPaciente.length === 0 && (
+                                            <tr>
+                                                <td
+                                                    colSpan={3}
+                                                    className="px-3 py-5 text-center text-sm text-slate-400"
+                                                >
+                                                    Sin recetas.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="print-section">
+                            <div className="mb-2 flex items-center justify-between">
+                                <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                                    Citas
+                                </h2>
+
+                                <p className="text-[10px] font-bold text-slate-500">
+                                    {citasPaciente.length}
+                                </p>
+                            </div>
+
+                            <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
+                                <table className="print-table w-full border-collapse text-[10px]">
+                                    <thead>
+                                        <tr className="bg-slate-100 print-light-bg">
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Fecha
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Servicio
+                                            </th>
+                                            <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Estado
+                                            </th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+                                        {citasPaciente.map((cita) => (
+                                            <tr key={cita.id}>
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
+                                                    {fechaLegible(cita.fecha)} · {cita.hora}
+                                                </td>
+
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
+                                                    {cita.servicioNombre}
+                                                    <p className="mt-0.5 text-[9px] text-slate-500">
+                                                        {cita.doctorNombre}
+                                                    </p>
+                                                </td>
+
+                                                <td className="border-b border-slate-300 px-2 py-2 align-top print-border">
+                                                    {textoEstado(cita.estado)}
+                                                </td>
+                                            </tr>
+                                        ))}
+
+                                        {citasPaciente.length === 0 && (
+                                            <tr>
+                                                <td
+                                                    colSpan={3}
+                                                    className="px-3 py-5 text-center text-sm text-slate-400"
+                                                >
+                                                    Sin citas.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section className="grid gap-4 py-3 md:grid-cols-2 print:py-2">
+                        <div className="print-section">
+                            <div className="mb-2 flex items-center justify-between">
+                                <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                                    Presupuestos
+                                </h2>
+
+                                <p className="text-[10px] font-bold text-slate-500">
+                                    {presupuestosPaciente.length}
+                                </p>
+                            </div>
+
+                            <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
+                                <table className="print-table w-full border-collapse text-[10px]">
+                                    <thead>
+                                        <tr className="bg-slate-100 print-light-bg">
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Fecha
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Presupuesto
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-center text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Estado
+                                            </th>
+                                            <th className="border-b border-slate-400 px-2 py-2 text-right text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Total
+                                            </th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+                                        {presupuestosPaciente.map((presupuesto) => {
+                                            const items = obtenerItemsPresupuesto(presupuesto);
+
+                                            return (
+                                                <tr key={presupuesto.id}>
+                                                    <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
+                                                        {fechaLegible(presupuesto.fecha)}
+                                                    </td>
+
+                                                    <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
+                                                        <p className="font-black">
+                                                            {presupuesto.id}
+                                                        </p>
+                                                        <p className="print-small mt-0.5 text-[9px] leading-3 text-slate-600">
+                                                            {(items || [])
+                                                                .slice(0, 2)
+                                                                .map((item) => item.nombre)
+                                                                .join(", ") ||
+                                                                presupuesto.origen ||
+                                                                "Manual"}
+                                                        </p>
+                                                    </td>
+
+                                                    <td className="border-b border-r border-slate-300 px-2 py-2 text-center print-border">
+                                                        {textoEstado(presupuesto.estado)}
+                                                    </td>
+
+                                                    <td className="border-b border-slate-300 px-2 py-2 text-right font-black print-border">
+                                                        {formatoMoneda(
+                                                            presupuesto.total,
+                                                            configuracion.simboloMoneda
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+
+                                        {presupuestosPaciente.length === 0 && (
+                                            <tr>
+                                                <td
+                                                    colSpan={4}
+                                                    className="px-3 py-5 text-center text-sm text-slate-400"
+                                                >
+                                                    Sin presupuestos.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div className="print-section">
+                            <div className="mb-2 flex items-center justify-between">
+                                <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                                    Documentos adjuntos
+                                </h2>
+
+                                <p className="text-[10px] font-bold text-slate-500">
+                                    {documentosPaciente.length}
+                                </p>
+                            </div>
+
+                            <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
+                                <table className="print-table w-full border-collapse text-[10px]">
+                                    <thead>
+                                        <tr className="bg-slate-100 print-light-bg">
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Fecha
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Archivo
+                                            </th>
+                                            <th className="border-b border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Categoría
+                                            </th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+                                        {documentosPaciente.map((documento) => (
+                                            <tr key={documento.id}>
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
+                                                    {fechaLegible(documento.fecha)}
+                                                    <br />
+                                                    <span className="font-normal text-slate-500">
+                                                        {documento.hora}
+                                                    </span>
+                                                </td>
+
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
+                                                    <p className="font-black">
+                                                        {documento.nombreArchivo}
+                                                    </p>
+                                                    <p className="print-small mt-0.5 text-[9px] leading-3 text-slate-600">
+                                                        {documento.descripcion || formatoTamano(documento.tamanoBytes)}
+                                                    </p>
+                                                </td>
+
+                                                <td className="border-b border-slate-300 px-2 py-2 align-top print-border">
+                                                    {documento.categoria}
+                                                </td>
+                                            </tr>
+                                        ))}
+
+                                        {documentosPaciente.length === 0 && (
+                                            <tr>
+                                                <td
+                                                    colSpan={3}
+                                                    className="px-3 py-5 text-center text-sm text-slate-400"
+                                                >
+                                                    Sin documentos.
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section className="grid gap-4 py-3 md:grid-cols-2 print:py-2">
+                        <div className="print-section md:col-span-2">
+                            <div className="mb-2 flex items-center justify-between">
+                                <h2 className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-600">
+                                    Ventas y cuentas
+                                </h2>
+
+                                <p className="text-[10px] font-bold text-slate-500">
+                                    {ventasPaciente.length} venta(s)
+                                </p>
+                            </div>
+
+                            <div className="overflow-hidden rounded-xl border border-slate-400 print:rounded-none print-border">
+                                <table className="print-table w-full border-collapse text-[10px]">
+                                    <thead>
+                                        <tr className="bg-slate-100 print-light-bg">
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Fecha
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Concepto
+                                            </th>
+                                            <th className="border-b border-r border-slate-400 px-2 py-2 text-center text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Estado
+                                            </th>
+                                            <th className="border-b border-slate-400 px-2 py-2 text-right text-[9px] font-black uppercase tracking-[0.08em] text-slate-700 print-border">
+                                                Total / saldo
+                                            </th>
+                                        </tr>
+                                    </thead>
+
+                                    <tbody>
+                                        {ventasPaciente.map((venta) => (
+                                            <tr key={venta.id}>
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
+                                                    {fechaLegible(venta.fecha)}
+                                                </td>
+
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
+                                                    {venta.concepto}
+                                                </td>
+
+                                                <td className="border-b border-r border-slate-300 px-2 py-2 text-center print-border">
+                                                    {textoEstado(venta.estado)}
+                                                </td>
+
+                                                <td className="border-b border-slate-300 px-2 py-2 text-right font-black print-border">
+                                                    {formatoMoneda(
+                                                        venta.total,
+                                                        configuracion.simboloMoneda
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        ))}
+
+                                        {cuentasPaciente.map((cuenta) => {
+                                            const estado = obtenerEstadoCuenta(cuenta);
+
+                                            return (
+                                                <tr key={cuenta.id}>
+                                                    <td className="border-b border-r border-slate-300 px-2 py-2 align-top font-bold print-border">
+                                                        {fechaLegible(cuenta.fecha)}
+                                                    </td>
+
+                                                    <td className="border-b border-r border-slate-300 px-2 py-2 align-top print-border">
+                                                        <p>{cuenta.concepto}</p>
+                                                        <p className="text-[9px] text-slate-500">
+                                                            Cuenta: {cuenta.id}
+                                                        </p>
+                                                    </td>
+
+                                                    <td className="border-b border-r border-slate-300 px-2 py-2 text-center print-border">
+                                                        {textoEstado(estado)}
+                                                    </td>
+
+                                                    <td className="border-b border-slate-300 px-2 py-2 text-right font-black print-border">
+                                                        {formatoMoneda(
+                                                            cuenta.saldo,
+                                                            configuracion.simboloMoneda
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+
+                                        {ventasPaciente.length === 0 &&
+                                            cuentasPaciente.length === 0 && (
+                                                <tr>
+                                                    <td
+                                                        colSpan={4}
+                                                        className="px-3 py-5 text-center text-sm text-slate-400"
+                                                    >
+                                                        Sin ventas ni cuentas.
+                                                    </td>
+                                                </tr>
+                                            )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section className="print-section grid gap-3 border-t border-slate-300 pt-3 md:grid-cols-[1fr_270px] print-border print:pt-2">
+                        <div>
+                            <h3 className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-500">
+                                Observaciones generales
+                            </h3>
+
+                            <p className="print-small mt-1 text-[11px] leading-4 text-slate-700">
+                                {paciente?.observaciones ||
+                                    "No hay observaciones generales registradas."}
+                            </p>
+
+                            <p className="print-small mt-1 border-l-2 border-slate-400 pl-2 text-[10px] leading-4 text-slate-600">
+                                Expediente generado con la información registrada en Supabase
+                                al momento de emisión. Validar contra documentos clínicos y
+                                comprobantes cuando corresponda.
+                            </p>
+                        </div>
+
+                        <div className="rounded-xl border border-slate-400 print:rounded-none print-border">
+                            <div className="flex items-center justify-between border-b border-slate-300 px-3 py-1.5 text-xs print-border">
+                                <span className="text-slate-600">Facturado</span>
+                                <strong>
+                                    {formatoMoneda(totalFacturado, configuracion.simboloMoneda)}
+                                </strong>
+                            </div>
+
+                            <div className="flex items-center justify-between border-b border-slate-300 px-3 py-1.5 text-xs print-border">
+                                <span className="text-slate-600">Pendiente</span>
+                                <strong>
+                                    {formatoMoneda(totalPendiente, configuracion.simboloMoneda)}
+                                </strong>
+                            </div>
+
+                            <div className="flex items-center justify-between bg-slate-100 px-3 py-2 print-light-bg">
+                                <span className="text-sm font-black text-slate-700">
+                                    Tratamientos
+                                </span>
+                                <strong className="text-lg text-slate-950">
+                                    {tratamientosPaciente.length}
+                                </strong>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section className="print-section mt-5 grid gap-8 md:grid-cols-2 print:mt-4">
+                        <div className="pt-7 print:pt-5">
+                            <div className="border-t border-slate-500 pt-1.5 text-center">
+                                <p className="text-xs font-black text-slate-950">
+                                    Firma del paciente
+                                </p>
+                                <p className="text-[10px] text-slate-500">
+                                    Recibido / conforme
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="pt-7 print:pt-5">
+                            <div className="border-t border-slate-500 pt-1.5 text-center">
+                                <p className="text-xs font-black text-slate-950">
+                                    Firma autorizada
+                                </p>
+                                <p className="text-[10px] text-slate-500">
+                                    {configuracion.nombreClinica}
+                                </p>
+                            </div>
+                        </div>
+                    </section>
+
+                    <footer className="mt-3 border-t border-slate-300 pt-2 text-center text-[10px] leading-4 text-slate-500 print-border">
+                        <p>{configuracion.mensajeRecibo || "Gracias por su preferencia."}</p>
+                        <p>
+                            Expediente clínico generado desde el sistema clínico.
                         </p>
-
-                        <p className="print-small mt-1 border-l-2 border-slate-400 pl-2 text-[10px] leading-4 text-slate-600">
-                            Expediente generado con la información registrada en el sistema
-                            al momento de emisión. Validar contra documentos clínicos y
-                            comprobantes cuando corresponda.
-                        </p>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-400 print:rounded-none print-border">
-                        <div className="flex items-center justify-between border-b border-slate-300 px-3 py-1.5 text-xs print-border">
-                            <span className="text-slate-600">Facturado</span>
-                            <strong>
-                                {formatoMoneda(totalFacturado, configuracion.simboloMoneda)}
-                            </strong>
-                        </div>
-
-                        <div className="flex items-center justify-between border-b border-slate-300 px-3 py-1.5 text-xs print-border">
-                            <span className="text-slate-600">Pendiente</span>
-                            <strong>
-                                {formatoMoneda(totalPendiente, configuracion.simboloMoneda)}
-                            </strong>
-                        </div>
-
-                        <div className="flex items-center justify-between bg-slate-100 px-3 py-2 print-light-bg">
-                            <span className="text-sm font-black text-slate-700">
-                                Tratamientos
-                            </span>
-                            <strong className="text-lg text-slate-950">
-                                {tratamientosPaciente.length}
-                            </strong>
-                        </div>
-                    </div>
+                    </footer>
                 </section>
-
-                <section className="print-section mt-5 grid gap-8 md:grid-cols-2 print:mt-4">
-                    <div className="pt-7 print:pt-5">
-                        <div className="border-t border-slate-500 pt-1.5 text-center">
-                            <p className="text-xs font-black text-slate-950">
-                                Firma del paciente
-                            </p>
-                            <p className="text-[10px] text-slate-500">
-                                Recibido / conforme
-                            </p>
-                        </div>
-                    </div>
-
-                    <div className="pt-7 print:pt-5">
-                        <div className="border-t border-slate-500 pt-1.5 text-center">
-                            <p className="text-xs font-black text-slate-950">
-                                Firma autorizada
-                            </p>
-                            <p className="text-[10px] text-slate-500">
-                                {configuracion.nombreClinica}
-                            </p>
-                        </div>
-                    </div>
-                </section>
-
-                <footer className="mt-3 border-t border-slate-300 pt-2 text-center text-[10px] leading-4 text-slate-500 print-border">
-                    <p>{configuracion.mensajeRecibo || "Gracias por su preferencia."}</p>
-                    <p>
-                        Expediente clínico generado desde el sistema clínico.
-                    </p>
-                </footer>
-            </section>
+            )}
         </main>
     );
 }

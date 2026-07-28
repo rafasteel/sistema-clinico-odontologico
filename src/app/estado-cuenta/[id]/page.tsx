@@ -15,6 +15,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     obtenerPacienteSupabase,
     type PacienteSupabase,
@@ -219,7 +220,11 @@ export default function EstadoCuentaPacientePage() {
         setError("");
 
         try {
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const pacienteSupabase = await obtenerPacienteSupabase(pacienteId);
             const cuentasSupabase = await listarCuentasPacienteSupabase(pacienteId);

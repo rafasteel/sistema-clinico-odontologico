@@ -32,6 +32,7 @@ import {
     type EstadoRegistroClinico,
     type PacienteSupabase,
 } from "@/lib/supabase/pacientes";
+import { listarCuentasCobrarSupabase } from "@/lib/supabase/finanzas";
 
 type Paciente = {
     id: string;
@@ -91,8 +92,6 @@ type CuentaPorCobrar = {
     estado?: EstadoCuenta | string;
     abonos?: AbonoCuenta[];
 };
-
-const CUENTAS_COBRAR_KEY = "cuentas_cobrar_sistema_clinico";
 
 const formularioVacio: FormularioPaciente = {
     nombre: "",
@@ -196,28 +195,37 @@ function normalizarTexto(valor: unknown) {
         .replace(/\s+/g, " ");
 }
 
-function leerCuentasPorCobrarGuardadas() {
-    if (typeof window === "undefined") return [] as CuentaPorCobrar[];
-
-    const clavesPosibles = [
-        CUENTAS_COBRAR_KEY,
-        "cuentas_por_cobrar_sistema_clinico",
-        "cuentas_sistema_clinico",
-    ];
-
-    for (const clave of clavesPosibles) {
-        try {
-            const datos = localStorage.getItem(clave);
-            if (!datos) continue;
-
-            const lista = JSON.parse(datos) as CuentaPorCobrar[];
-            if (Array.isArray(lista)) return lista;
-        } catch {
-            continue;
-        }
-    }
-
-    return [];
+function convertirCuentaCobrarSupabase(cuenta: Record<string, unknown>): CuentaPorCobrar {
+    return {
+        id: String(cuenta.id || ""),
+        ventaId: String(cuenta.venta_id || cuenta.ventaId || ""),
+        pacienteId: String(cuenta.paciente_id || cuenta.pacienteId || ""),
+        pacienteNombre: String(cuenta.paciente_nombre || cuenta.pacienteNombre || ""),
+        nombrePaciente: String(cuenta.nombre_paciente || cuenta.nombrePaciente || ""),
+        clienteNombre: String(cuenta.cliente_nombre || cuenta.clienteNombre || ""),
+        concepto: String(cuenta.concepto || ""),
+        total: cuenta.total as number | string | undefined,
+        abonado: (cuenta.abonado || cuenta.monto_abonado || cuenta.montoAbonado) as
+            | number
+            | string
+            | undefined,
+        saldo: (cuenta.saldo || cuenta.saldo_pendiente || cuenta.saldoPendiente) as
+            | number
+            | string
+            | undefined,
+        saldoPendiente: (cuenta.saldo_pendiente || cuenta.saldoPendiente) as
+            | number
+            | string
+            | undefined,
+        fecha: String(cuenta.fecha || ""),
+        fechaVencimiento: String(
+            cuenta.fecha_vencimiento || cuenta.fechaVencimiento || ""
+        ),
+        estado: String(cuenta.estado || "Pendiente"),
+        abonos: Array.isArray(cuenta.abonos)
+            ? (cuenta.abonos as AbonoCuenta[])
+            : [],
+    };
 }
 
 function cuentaDebeContarse(cuenta: CuentaPorCobrar) {
@@ -309,11 +317,17 @@ export default function PacientesPage() {
         setErrorCarga("");
 
         try {
-            const listaSupabase = await listarPacientesSupabase();
+            const [listaSupabase, cuentasSupabase] = await Promise.all([
+                listarPacientesSupabase(),
+                listarCuentasCobrarSupabase(),
+            ]);
             const lista = listaSupabase.map(convertirPacienteSupabase);
+            const cuentas = (cuentasSupabase || []).map((cuenta) =>
+                convertirCuentaCobrarSupabase(cuenta as Record<string, unknown>)
+            );
 
             setPacientes(lista);
-            setCuentasCobrar(leerCuentasPorCobrarGuardadas());
+            setCuentasCobrar(cuentas);
             setPacienteSeleccionadoId((seleccionadoActual) => {
                 if (lista.some((paciente) => paciente.id === seleccionadoActual)) {
                     return seleccionadoActual;
@@ -510,7 +524,7 @@ export default function PacientesPage() {
     return (
         <AppShell
             titulo="Pacientes"
-            descripcion="Directorio clínico limpio, búsqueda rápida y acceso al expediente conectado con Supabase"
+            descripcion="Directorio clínico, saldos y acceso al expediente conectados con Supabase"
             moduloActivo="Pacientes"
         >
             {cargandoDatos && (
@@ -548,7 +562,7 @@ export default function PacientesPage() {
                         </h2>
                         <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-500">
                             Buscá, revisá datos importantes y abrí rápido el expediente,
-                            odontograma, presupuestos o estado de cuenta.
+                            odontograma, presupuestos o estado de cuenta. Los saldos salen desde Supabase.
                         </p>
                     </div>
 

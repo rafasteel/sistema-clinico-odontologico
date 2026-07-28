@@ -27,6 +27,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     listarPacientesSupabase,
     type PacienteSupabase,
@@ -409,7 +410,11 @@ export default function DashboardPage() {
         setError("");
 
         try {
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const [
                 pacientesSupabase,

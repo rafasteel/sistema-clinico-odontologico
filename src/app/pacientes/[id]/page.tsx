@@ -34,6 +34,8 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import { crearClienteSupabase } from "@/lib/supabase/client";
 import {
     obtenerPacienteSupabase,
     type PacienteSupabase,
@@ -52,12 +54,6 @@ import {
     type RecetaSupabase,
     type TratamientoSupabase,
 } from "@/lib/supabase/perfilPaciente";
-
-type UsuarioSistema = {
-    usuario: string;
-    nombre: string;
-    rol: string;
-};
 
 type Paciente = {
     id: string;
@@ -239,29 +235,8 @@ function fechaHoyLocal() {
     return `${year}-${month}-${day}`;
 }
 
-function horaActualLocal() {
-    const fecha = new Date();
-    const hours = String(fecha.getHours()).padStart(2, "0");
-    const minutes = String(fecha.getMinutes()).padStart(2, "0");
-
-    return `${hours}:${minutes}`;
-}
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
-function numero(valor: string) {
-    const convertido = Number(valor || 0);
+function numero(valor: unknown) {
+    const convertido = Number(valor ?? 0);
     if (Number.isNaN(convertido)) return 0;
 
     return convertido;
@@ -384,6 +359,135 @@ function horaCorta(hora: string) {
     return hora.slice(0, 5);
 }
 
+function texto(valor: unknown, respaldo = "") {
+    const convertido = String(valor ?? "").trim();
+
+    return convertido || respaldo;
+}
+
+function fechaSolo(valor: unknown) {
+    const convertido = texto(valor);
+
+    if (convertido.length >= 10) return convertido.slice(0, 10);
+
+    return "";
+}
+
+function horaSolo(valor: unknown) {
+    const convertido = texto(valor);
+
+    if (!convertido) return "";
+
+    if (convertido.includes("T")) return convertido.slice(11, 16);
+
+    return convertido.slice(0, 5);
+}
+
+function convertirCitaSupabase(data: Record<string, any>): Cita {
+    return {
+        id: texto(data.id),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        pacienteNombre: texto(data.paciente_nombre || data.pacienteNombre),
+        doctorId: texto(data.doctor_id || data.doctorId),
+        doctorNombre: texto(data.doctor_nombre || data.doctorNombre),
+        servicioId: texto(data.servicio_id || data.servicioId),
+        servicioNombre: texto(data.servicio_nombre || data.servicioNombre),
+        costo: numero(data.costo),
+        fecha: fechaSolo(data.fecha),
+        hora: horaSolo(data.hora || data.creado_en || data.creadaEn),
+        recurrencia: texto(data.recurrencia, "No repetir"),
+        estado: texto(data.estado, "Programada") as EstadoCita,
+        observaciones: texto(data.observaciones),
+        creadaEn: texto(data.creado_en || data.creadaEn),
+    };
+}
+
+function convertirVentaSupabase(data: Record<string, any>): Venta {
+    return {
+        id: texto(data.id),
+        fecha: fechaSolo(data.fecha || data.creado_en || data.creadaEn),
+        hora: horaSolo(data.hora || data.creado_en || data.creadaEn),
+        tipoCobro: texto(data.tipo_cobro || data.tipoCobro),
+        citaId: texto(data.cita_id || data.citaId),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        clienteNombre: texto(data.cliente_nombre || data.clienteNombre),
+        concepto: texto(data.concepto),
+        total: numero(data.total),
+        efectivo: numero(data.efectivo),
+        tarjeta: numero(data.tarjeta),
+        transferencia: numero(data.transferencia),
+        credito: numero(data.credito),
+        estado: texto(data.estado, "Pagada") as EstadoVenta,
+        usuarioNombre: texto(data.usuario_nombre || data.usuarioNombre),
+        observaciones: texto(data.observaciones),
+    };
+}
+
+function convertirCuentaSupabase(data: Record<string, any>): CuentaPorCobrar {
+    return {
+        id: texto(data.id),
+        ventaId: texto(data.venta_id || data.ventaId),
+        pacienteId: texto(data.paciente_id || data.pacienteId),
+        pacienteNombre: texto(data.paciente_nombre || data.pacienteNombre),
+        concepto: texto(data.concepto),
+        total: numero(data.total),
+        saldo: numero(data.saldo),
+        fecha: fechaSolo(data.fecha || data.creado_en || data.creadaEn),
+        fechaVencimiento: fechaSolo(data.fecha_vencimiento || data.fechaVencimiento),
+        estado: texto(data.estado, "Pendiente") as EstadoCuenta,
+    };
+}
+
+async function listarCitasPacienteSupabaseDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("citas")
+        .select("*")
+        .eq("paciente_id", pacienteId)
+        .order("fecha", { ascending: false })
+        .order("hora", { ascending: false });
+
+    if (error) throw new Error(error.message);
+
+    return (data || []).map((item) =>
+        convertirCitaSupabase(item as Record<string, any>)
+    );
+}
+
+async function listarVentasPacienteSupabaseDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("ventas")
+        .select("*")
+        .eq("paciente_id", pacienteId)
+        .order("fecha", { ascending: false })
+        .order("hora", { ascending: false });
+
+    if (error) throw new Error(error.message);
+
+    return (data || []).map((item) =>
+        convertirVentaSupabase(item as Record<string, any>)
+    );
+}
+
+async function listarCuentasPacienteSupabaseDirecto(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("cuentas_cobrar")
+        .select("*")
+        .eq("paciente_id", pacienteId)
+        .order("fecha", { ascending: false });
+
+    if (error) throw new Error(error.message);
+
+    return (data || []).map((item) =>
+        convertirCuentaSupabase(item as Record<string, any>)
+    );
+}
+
 function convertirNotaClinicaSupabase(nota: NotaClinicaSupabase): NotaClinica {
     return {
         id: nota.id,
@@ -441,7 +545,6 @@ export default function PerfilPacientePage() {
         CONFIGURACION_PREDETERMINADA
     );
 
-    const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
     const [paciente, setPaciente] = useState<Paciente | null>(null);
 
     const [citas, setCitas] = useState<Cita[]>([]);
@@ -463,26 +566,30 @@ export default function PerfilPacientePage() {
     async function cargarPerfilPaciente() {
         setCargandoPerfil(true);
         setErrorPerfil("");
-        setConfiguracion(obtenerConfiguracionClinica());
-
-        const usuarioGuardado = leerLocalStorage<UsuarioSistema | null>(
-            "usuario_sistema_clinico",
-            null
-        );
-
-        setUsuario(usuarioGuardado);
 
         try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
             const [
                 pacienteSupabase,
                 notasSupabase,
                 tratamientosSupabase,
                 recetasSupabase,
+                citasSupabase,
+                ventasSupabase,
+                cuentasSupabase,
             ] = await Promise.all([
                 obtenerPacienteSupabase(pacienteId),
                 listarNotasClinicasPacienteSupabase(pacienteId),
                 listarTratamientosPacienteSupabase(pacienteId),
                 listarRecetasPacienteSupabase(pacienteId),
+                listarCitasPacienteSupabaseDirecto(pacienteId),
+                listarVentasPacienteSupabaseDirecto(pacienteId),
+                listarCuentasPacienteSupabaseDirecto(pacienteId),
             ]);
 
             setPaciente(convertirPacienteSupabase(pacienteSupabase));
@@ -491,6 +598,9 @@ export default function PerfilPacientePage() {
                 tratamientosSupabase.map(convertirTratamientoSupabase)
             );
             setRecetas(recetasSupabase.map(convertirRecetaSupabase));
+            setCitas(citasSupabase);
+            setVentas(ventasSupabase);
+            setCuentas(cuentasSupabase);
         } catch (error) {
             const mensaje =
                 error instanceof Error
@@ -501,23 +611,13 @@ export default function PerfilPacientePage() {
             setNotas([]);
             setTratamientos([]);
             setRecetas([]);
+            setCitas([]);
+            setVentas([]);
+            setCuentas([]);
             setErrorPerfil(mensaje);
+        } finally {
+            setCargandoPerfil(false);
         }
-
-        /*
-         * Estos módulos todavía quedan temporales en localStorage.
-         * Los migraremos cuando pasemos Agenda, Caja y Cuentas por Cobrar.
-         */
-        setCitas(leerLocalStorage<Cita[]>("citas_sistema_clinico", []));
-        setVentas(leerLocalStorage<Venta[]>("ventas_sistema_clinico", []));
-        setCuentas(
-            leerLocalStorage<CuentaPorCobrar[]>(
-                "cuentas_cobrar_sistema_clinico",
-                []
-            )
-        );
-
-        setCargandoPerfil(false);
     }
 
     useEffect(() => {
@@ -963,6 +1063,15 @@ export default function PerfilPacientePage() {
                         Ir a caja
                     </Link>
                 </div>
+            </section>
+
+            <section className="mb-4 rounded-2xl border border-teal-100 bg-teal-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">
+                    Perfil conectado a Supabase
+                </p>
+                <p className="mt-1 text-xs font-semibold text-teal-700">
+                    Paciente, notas, tratamientos, recetas, citas, ventas y cuentas por cobrar se leen desde la base real de la clínica.
+                </p>
             </section>
 
             <section className="overflow-hidden rounded-3xl bg-slate-900 p-6 text-white shadow-[0_24px_80px_rgba(15,23,42,0.20)]">

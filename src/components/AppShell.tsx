@@ -48,6 +48,7 @@ import {
 } from "@/lib/supabase/licencia";
 
 type RolUsuario = "SUPER_ADMIN" | "ADMIN" | "DOCTOR" | "RECEPCION" | "CAJA";
+type RolUsuarioClinica = Exclude<RolUsuario, "SUPER_ADMIN">;
 
 type UsuarioSistema = {
     usuario: string;
@@ -372,7 +373,11 @@ export default function AppShell({
                 });
 
                 try {
-                    const notificaciones = generarNotificacionesSistema(usuarioActual);
+                    const notificaciones = generarNotificacionesSistema({
+                        usuario: usuarioActual.usuario,
+                        nombre: usuarioActual.nombre,
+                        rol: usuarioActual.rol as RolUsuarioClinica,
+                    });
                     const revisadasRaw = localStorage.getItem(
                         "notificaciones_revisadas_sistema_clinico"
                     );

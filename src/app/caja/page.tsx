@@ -14,7 +14,6 @@ import {
     RotateCcw,
     Search,
     ShieldAlert,
-    ShoppingBag,
     Trash2,
     Wallet,
     X,
@@ -26,6 +25,7 @@ import {
     obtenerConfiguracionClinica,
     POSClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     cambiarEstadoCitaSupabase,
     listarCitasSupabase,
@@ -150,28 +150,6 @@ type Producto = {
     estado: EstadoProducto;
 };
 
-type TipoMovimiento =
-    | "Entrada"
-    | "Salida"
-    | "Uso clínico"
-    | "Pérdida"
-    | "Ajuste";
-
-type MovimientoInventario = {
-    id: string;
-    fecha: string;
-    hora: string;
-    productoId: string;
-    productoNombre: string;
-    tipo: TipoMovimiento;
-    cantidad: number;
-    stockAnterior: number;
-    stockNuevo: number;
-    costoUnitario: number;
-    motivo: string;
-    usuarioNombre: string;
-};
-
 type FormularioCaja = {
     citaId: string;
     pacienteId: string;
@@ -197,51 +175,6 @@ type FormularioAbono = {
     transferencia: string;
     posId: string;
 };
-
-const productosIniciales: Producto[] = [
-    {
-        id: "1",
-        codigo: "PROD-001",
-        nombre: "Guantes de nitrilo",
-        categoria: "Insumos",
-        unidad: "Caja",
-        stock: 12,
-        stockMinimo: 5,
-        costoCompra: 250,
-        precioVenta: 0,
-        proveedor: "Dental Supply Nicaragua",
-        vencimiento: "",
-        estado: "Activo",
-    },
-    {
-        id: "2",
-        codigo: "PROD-002",
-        nombre: "Anestesia dental",
-        categoria: "Medicamento",
-        unidad: "Frasco",
-        stock: 8,
-        stockMinimo: 3,
-        costoCompra: 430,
-        precioVenta: 0,
-        proveedor: "Proveedor Médico Central",
-        vencimiento: "",
-        estado: "Activo",
-    },
-    {
-        id: "3",
-        codigo: "PROD-003",
-        nombre: "Cepillo dental",
-        categoria: "Producto venta",
-        unidad: "Unidad",
-        stock: 30,
-        stockMinimo: 10,
-        costoCompra: 35,
-        precioVenta: 80,
-        proveedor: "Dental Supply Nicaragua",
-        vencimiento: "",
-        estado: "Activo",
-    },
-];
 
 const formularioCajaVacio: FormularioCaja = {
     citaId: "",
@@ -324,19 +257,6 @@ function colorEstadoCuenta(estado: EstadoCuentaCobrarSupabase) {
     if (estado === "Pendiente") return "bg-blue-50 text-blue-700";
     if (estado === "Vencida") return "bg-red-50 text-red-700";
     return "bg-slate-100 text-slate-500";
-}
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
 }
 
 function convertirCita(cita: CitaSupabase): Cita {
@@ -429,7 +349,6 @@ export default function CajaPage() {
     const [ventas, setVentas] = useState<Venta[]>([]);
     const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([]);
     const [productos, setProductos] = useState<Producto[]>([]);
-    const [movimientos, setMovimientos] = useState<MovimientoInventario[]>([]);
 
     const [formulario, setFormulario] =
         useState<FormularioCaja>(formularioCajaVacio);
@@ -460,7 +379,14 @@ export default function CajaPage() {
                 setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
             }
 
-            const configuracionActual = obtenerConfiguracionClinica();
+            let configuracionActual: ConfiguracionClinica;
+
+            try {
+                configuracionActual = await obtenerConfiguracionClinicaSupabase();
+            } catch {
+                configuracionActual = obtenerConfiguracionClinica();
+            }
+
             const posInicial =
                 (configuracionActual.poses || []).find((pos) => pos.activo) ||
                 (configuracionActual.poses || [])[0];
@@ -491,7 +417,6 @@ export default function CajaPage() {
             setVentas(ventasSupabase.map(convertirVenta));
             setCuentas(cuentasSupabase.map(convertirCuenta));
             setProductos(productosSupabase.map(convertirProducto));
-            setMovimientos([]);
         } catch (errorActual) {
             const mensaje =
                 errorActual instanceof Error
@@ -507,19 +432,6 @@ export default function CajaPage() {
     useEffect(() => {
         cargarDatos();
     }, []);
-
-    function guardarProductos(nuevaLista: Producto[]) {
-        setProductos(nuevaLista);
-        localStorage.setItem("productos_sistema_clinico", JSON.stringify(nuevaLista));
-    }
-
-    function guardarMovimientos(nuevaLista: MovimientoInventario[]) {
-        setMovimientos(nuevaLista);
-        localStorage.setItem(
-            "movimientos_inventario_sistema_clinico",
-            JSON.stringify(nuevaLista)
-        );
-    }
 
     function actualizarCampo<K extends keyof FormularioCaja>(
         campo: K,

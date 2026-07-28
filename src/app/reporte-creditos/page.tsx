@@ -24,6 +24,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     listarAbonosCuentaSupabase,
     listarCuentasCobrarSupabase,
@@ -333,7 +334,11 @@ export default function ReporteCreditosPage() {
         setError("");
 
         try {
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const [cuentasSupabase, ventasSupabase, pacientesSupabase] =
                 await Promise.all([

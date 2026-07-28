@@ -29,25 +29,34 @@ export type ResultadoPerfilActual = {
     error: string | null;
 };
 
-function respuestaConTiempoMaximo<T>(promesa: Promise<T>, milisegundos = 8000) {
-    return Promise.race([
-        promesa,
-        new Promise<T>((_, reject) => {
-            window.setTimeout(() => {
-                reject(new Error("La consulta a Supabase tardó demasiado."));
-            }, milisegundos);
-        }),
-    ]);
+function respuestaConTiempoMaximo<T>(
+    promesa: PromiseLike<T>,
+    milisegundos = 8000
+): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        const temporizador = setTimeout(() => {
+            reject(new Error("La consulta a Supabase tardó demasiado."));
+        }, milisegundos);
+
+        promesa.then(
+            (resultado) => {
+                clearTimeout(temporizador);
+                resolve(resultado);
+            },
+            (error) => {
+                clearTimeout(temporizador);
+                reject(error);
+            }
+        );
+    });
 }
 
 export async function obtenerPerfilActual(): Promise<ResultadoPerfilActual> {
     try {
         const supabase = crearClienteSupabase();
 
-        const { data: sessionData, error: errorSesion } = await respuestaConTiempoMaximo(
-            supabase.auth.getSession(),
-            8000
-        );
+        const { data: sessionData, error: errorSesion } =
+            await respuestaConTiempoMaximo(supabase.auth.getSession(), 8000);
 
         if (errorSesion) {
             return {
@@ -67,16 +76,17 @@ export async function obtenerPerfilActual(): Promise<ResultadoPerfilActual> {
             };
         }
 
-        const { data: perfil, error: errorPerfil } = await respuestaConTiempoMaximo(
-            supabase
-                .from("usuarios_perfiles")
-                .select(
-                    "id, auth_user_id, clinica_id, nombre, usuario, correo, rol, estado, creado_en, actualizado_en"
-                )
-                .eq("auth_user_id", user.id)
-                .maybeSingle(),
-            8000
-        );
+        const { data: perfil, error: errorPerfil } =
+            await respuestaConTiempoMaximo(
+                supabase
+                    .from("usuarios_perfiles")
+                    .select(
+                        "id, auth_user_id, clinica_id, nombre, usuario, correo, rol, estado, creado_en, actualizado_en"
+                    )
+                    .eq("auth_user_id", user.id)
+                    .maybeSingle(),
+                8000
+            );
 
         if (errorPerfil) {
             return {

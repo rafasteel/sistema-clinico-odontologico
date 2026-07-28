@@ -15,6 +15,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     listarAbonosCuentaSupabase,
     listarCuentasCobrarSupabase,
@@ -213,7 +214,11 @@ export default function ReciboPage() {
         setError("");
 
         try {
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const ventaSupabase = await obtenerVentaSupabase(ventaId);
             const ventaConvertida = convertirVenta(ventaSupabase);

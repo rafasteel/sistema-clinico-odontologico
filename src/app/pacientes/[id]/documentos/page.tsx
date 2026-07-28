@@ -4,13 +4,14 @@ import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import {
+    AlertTriangle,
     ArrowLeft,
     Download,
     Eye,
     FileText,
     ImageIcon,
     Paperclip,
-    Plus,
+    RefreshCcw,
     Save,
     Search,
     ShieldAlert,
@@ -21,12 +22,18 @@ import {
     ClipboardList,
 } from "lucide-react";
 import AppShell from "@/components/AppShell";
-
-type UsuarioSistema = {
-    usuario: string;
-    nombre: string;
-    rol: string;
-};
+import {
+    obtenerPacienteSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
+import {
+    eliminarDocumentoPacienteSupabase,
+    listarDocumentosPacienteSupabase,
+    obtenerUrlDocumentoPacienteSupabase,
+    subirDocumentoPacienteSupabase,
+    type CategoriaDocumentoPacienteSupabase,
+    type DocumentoPacienteSupabase,
+} from "@/lib/supabase/documentosPacientes";
 
 type Paciente = {
     id: string;
@@ -44,15 +51,7 @@ type Paciente = {
     ultimaCita: string;
 };
 
-type CategoriaDocumento =
-    | "Cédula / identificación"
-    | "Radiografía"
-    | "Consentimiento firmado"
-    | "Examen / estudio"
-    | "Fotografía clínica"
-    | "Receta externa"
-    | "Documento administrativo"
-    | "Otro";
+type CategoriaDocumento = CategoriaDocumentoPacienteSupabase;
 
 type DocumentoPaciente = {
     id: string;
@@ -65,7 +64,7 @@ type DocumentoPaciente = {
     tamanoBytes: number;
     categoria: CategoriaDocumento;
     descripcion: string;
-    dataUrl: string;
+    urlFirmada: string;
     usuarioNombre: string;
 };
 
@@ -74,49 +73,10 @@ type FormularioDocumento = {
     descripcion: string;
 };
 
-const PACIENTES_KEY = "pacientes_sistema_clinico";
-const DOCUMENTOS_KEY = "documentos_pacientes_sistema_clinico";
-const USUARIO_KEY = "usuario_sistema_clinico";
-
 const formularioVacio: FormularioDocumento = {
     categoria: "Otro",
     descripcion: "",
 };
-
-function fechaHoyLocal() {
-    const fecha = new Date();
-    const year = fecha.getFullYear();
-    const month = String(fecha.getMonth() + 1).padStart(2, "0");
-    const day = String(fecha.getDate()).padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
-}
-
-function horaActualLocal() {
-    const fecha = new Date();
-    const hours = String(fecha.getHours()).padStart(2, "0");
-    const minutes = String(fecha.getMinutes()).padStart(2, "0");
-
-    return `${hours}:${minutes}`;
-}
-
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
-
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
-}
-
-function guardarLocalStorage<T>(clave: string, valor: T) {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(clave, JSON.stringify(valor));
-}
 
 function fechaLegible(fecha: string) {
     if (!fecha) return "No registrada";
@@ -163,11 +123,48 @@ function colorCategoria(categoria: CategoriaDocumento) {
     return "bg-slate-100 text-slate-600";
 }
 
+function convertirPaciente(paciente: PacienteSupabase): Paciente {
+    return {
+        id: paciente.id,
+        nombre: paciente.nombre || "",
+        telefono: paciente.telefono || paciente.whatsapp || "",
+        cedula: paciente.cedula || "",
+        fechaNacimiento: paciente.fecha_nacimiento || "",
+        direccion: paciente.direccion || "",
+        alergias: paciente.alergias || "",
+        enfermedades:
+            paciente.enfermedades_sistemicas ||
+            paciente.antecedentes ||
+            "",
+        medicamentos: paciente.medicamentos_actuales || "",
+        observaciones: paciente.observaciones || "",
+        estado: paciente.estado || "Activo",
+        saldoPendiente: 0,
+        ultimaCita: "",
+    };
+}
+
+function convertirDocumento(documento: DocumentoPacienteSupabase): DocumentoPaciente {
+    return {
+        id: documento.id,
+        pacienteId: documento.paciente_id,
+        pacienteNombre: documento.paciente_nombre,
+        fecha: documento.fecha,
+        hora: String(documento.hora || "").slice(0, 5),
+        nombreArchivo: documento.nombre_archivo,
+        tipoArchivo: documento.tipo_archivo,
+        tamanoBytes: Number(documento.tamano_bytes || 0),
+        categoria: documento.categoria,
+        descripcion: documento.descripcion || "",
+        urlFirmada: documento.url_firmada || "",
+        usuarioNombre: documento.usuario_nombre || "Usuario no identificado",
+    };
+}
+
 export default function DocumentosPacientePage() {
     const params = useParams();
     const pacienteId = String(params.id || "");
 
-    const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
     const [paciente, setPaciente] = useState<Paciente | null>(null);
     const [documentos, setDocumentos] = useState<DocumentoPaciente[]>([]);
     const [formulario, setFormulario] =
@@ -178,21 +175,35 @@ export default function DocumentosPacientePage() {
         "Todas"
     );
     const [subiendo, setSubiendo] = useState(false);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
+
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
+
+        try {
+            const [pacienteSupabase, documentosSupabase] = await Promise.all([
+                obtenerPacienteSupabase(pacienteId),
+                listarDocumentosPacienteSupabase(pacienteId),
+            ]);
+
+            setPaciente(pacienteSupabase ? convertirPaciente(pacienteSupabase) : null);
+            setDocumentos(documentosSupabase.map(convertirDocumento));
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudieron cargar los documentos desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
+    }
 
     useEffect(() => {
-        const pacientes = leerLocalStorage<Paciente[]>(PACIENTES_KEY, []);
-        const documentosGuardados = leerLocalStorage<DocumentoPaciente[]>(
-            DOCUMENTOS_KEY,
-            []
-        );
-        const usuarioGuardado = leerLocalStorage<UsuarioSistema | null>(
-            USUARIO_KEY,
-            null
-        );
-
-        setPaciente(pacientes.find((item) => item.id === pacienteId) || null);
-        setDocumentos(documentosGuardados);
-        setUsuario(usuarioGuardado);
+        cargarDatos();
     }, [pacienteId]);
 
     function actualizarCampo<K extends keyof FormularioDocumento>(
@@ -213,7 +224,7 @@ export default function DocumentosPacientePage() {
             return;
         }
 
-        const limiteMb = 2.5;
+        const limiteMb = 10;
         const limiteBytes = limiteMb * 1024 * 1024;
 
         if (archivoSeleccionado.size > limiteBytes) {
@@ -224,22 +235,6 @@ export default function DocumentosPacientePage() {
         }
 
         setArchivo(archivoSeleccionado);
-    }
-
-    function convertirArchivoADataUrl(file: File) {
-        return new Promise<string>((resolve, reject) => {
-            const reader = new FileReader();
-
-            reader.onload = () => {
-                resolve(String(reader.result || ""));
-            };
-
-            reader.onerror = () => {
-                reject(new Error("No se pudo leer el archivo."));
-            };
-
-            reader.readAsDataURL(file);
-        });
     }
 
     async function guardarDocumento(event: FormEvent<HTMLFormElement>) {
@@ -253,29 +248,17 @@ export default function DocumentosPacientePage() {
         }
 
         setSubiendo(true);
+        setError("");
 
         try {
-            const dataUrl = await convertirArchivoADataUrl(archivo);
-
-            const nuevoDocumento: DocumentoPaciente = {
-                id: `DOC-${Date.now()}`,
-                pacienteId: paciente.id,
-                pacienteNombre: paciente.nombre,
-                fecha: fechaHoyLocal(),
-                hora: horaActualLocal(),
-                nombreArchivo: archivo.name,
-                tipoArchivo: archivo.type || "application/octet-stream",
-                tamanoBytes: archivo.size,
+            await subirDocumentoPacienteSupabase({
+                paciente_id: paciente.id,
+                archivo,
                 categoria: formulario.categoria,
                 descripcion: formulario.descripcion.trim(),
-                dataUrl,
-                usuarioNombre: usuario?.nombre || "Usuario no identificado",
-            };
+            });
 
-            const nuevaLista = [nuevoDocumento, ...documentos];
-
-            setDocumentos(nuevaLista);
-            guardarLocalStorage(DOCUMENTOS_KEY, nuevaLista);
+            await cargarDatos();
 
             setArchivo(null);
             setFormulario(formularioVacio);
@@ -283,92 +266,80 @@ export default function DocumentosPacientePage() {
             const input = document.getElementById("archivo-documento") as HTMLInputElement | null;
             if (input) input.value = "";
 
-            alert("Documento adjuntado correctamente.");
-        } catch {
-            alert("No se pudo guardar el archivo. Intentá con un archivo más liviano.");
+            alert("Documento adjuntado correctamente en Supabase Storage.");
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo guardar el archivo.";
+
+            setError(mensaje);
+            alert(mensaje);
         } finally {
             setSubiendo(false);
         }
     }
 
-    function eliminarDocumento(id: string) {
+    async function eliminarDocumento(id: string) {
         const confirmar = window.confirm("¿Seguro que deseas eliminar este documento?");
         if (!confirmar) return;
 
-        const nuevaLista = documentos.filter((documento) => documento.id !== id);
+        setSubiendo(true);
+        setError("");
 
-        setDocumentos(nuevaLista);
-        guardarLocalStorage(DOCUMENTOS_KEY, nuevaLista);
+        try {
+            await eliminarDocumentoPacienteSupabase(id);
+            await cargarDatos();
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo eliminar el documento.";
+
+            setError(mensaje);
+            alert(mensaje);
+        } finally {
+            setSubiendo(false);
+        }
     }
 
-    function abrirDocumento(documento: DocumentoPaciente) {
-        const nuevaVentana = window.open();
-        if (!nuevaVentana) {
-            alert("El navegador bloqueó la ventana emergente.");
-            return;
+    async function abrirDocumento(documento: DocumentoPaciente) {
+        try {
+            const url = documento.urlFirmada || (await obtenerUrlDocumentoPacienteSupabase(documento.id));
+            const nuevaVentana = window.open(url, "_blank");
+
+            if (!nuevaVentana) {
+                alert("El navegador bloqueó la ventana emergente.");
+            }
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo abrir el documento.";
+
+            alert(mensaje);
         }
+    }
 
-        nuevaVentana.document.write(`
-      <html>
-        <head>
-          <title>${documento.nombreArchivo}</title>
-          <style>
-            body {
-              margin: 0;
-              background: #0f172a;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              min-height: 100vh;
-              font-family: Arial, sans-serif;
-            }
-            img {
-              max-width: 96vw;
-              max-height: 96vh;
-              border-radius: 18px;
-              background: white;
-            }
-            iframe {
-              width: 100vw;
-              height: 100vh;
-              border: none;
-              background: white;
-            }
-            .box {
-              background: white;
-              padding: 28px;
-              border-radius: 24px;
-              text-align: center;
-              max-width: 520px;
-            }
-            a {
-              display: inline-block;
-              margin-top: 16px;
-              background: #0f172a;
-              color: white;
-              padding: 12px 18px;
-              border-radius: 14px;
-              text-decoration: none;
-              font-weight: bold;
-            }
-          </style>
-        </head>
-        <body>
-          ${esImagen(documento.tipoArchivo)
-                ? `<img src="${documento.dataUrl}" alt="${documento.nombreArchivo}" />`
-                : esPdf(documento.tipoArchivo)
-                    ? `<iframe src="${documento.dataUrl}"></iframe>`
-                    : `<div class="box">
-                  <h2>Vista previa no disponible</h2>
-                  <p>Este tipo de archivo no se puede previsualizar aquí.</p>
-                  <a href="${documento.dataUrl}" download="${documento.nombreArchivo}">Descargar archivo</a>
-                </div>`
-            }
-        </body>
-      </html>
-    `);
+    async function descargarDocumento(documento: DocumentoPaciente) {
+        try {
+            const url = documento.urlFirmada || (await obtenerUrlDocumentoPacienteSupabase(documento.id));
+            const enlace = document.createElement("a");
 
-        nuevaVentana.document.close();
+            enlace.href = url;
+            enlace.download = documento.nombreArchivo;
+            enlace.target = "_blank";
+            document.body.appendChild(enlace);
+            enlace.click();
+            enlace.remove();
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo descargar el documento.";
+
+            alert(mensaje);
+        }
     }
 
     const documentosPaciente = useMemo(() => {
@@ -408,7 +379,7 @@ export default function DocumentosPacientePage() {
         (documento) => documento.pacienteId === pacienteId && esPdf(documento.tipoArchivo)
     ).length;
 
-    if (!paciente) {
+    if (!paciente && !cargando) {
         return (
             <AppShell
                 titulo="Documentos del paciente"
@@ -442,13 +413,50 @@ export default function DocumentosPacientePage() {
 
     return (
         <AppShell
-            titulo={`Documentos: ${paciente.nombre}`}
+            titulo={`Documentos: ${paciente?.nombre || "Paciente"}`}
             descripcion="Adjuntos clínicos y administrativos del expediente"
             moduloActivo="Pacientes"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudo procesar documentos
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Documentos conectados a Supabase Storage
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Los archivos se guardan por clínica y paciente en Storage privado.
+                    </p>
+                </div>
+
+                <button
+                    type="button"
+                    onClick={cargarDatos}
+                    disabled={cargando || subiendo}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar"}
+                </button>
+            </section>
+
             <section className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <Link
-                    href={`/pacientes/${paciente.id}`}
+                    href={`/pacientes/${paciente?.id || pacienteId}`}
                     className="flex w-fit items-center gap-2 rounded-xl bg-white px-4 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
                 >
                     <ArrowLeft className="h-4 w-4" />
@@ -457,7 +465,7 @@ export default function DocumentosPacientePage() {
 
                 <div className="flex flex-wrap gap-2">
                     <Link
-                        href={`/expediente/${paciente.id}`}
+                        href={`/expediente/${paciente?.id || pacienteId}`}
                         className="flex items-center gap-2 rounded-xl bg-teal-50 px-4 py-3 text-[12px] font-bold text-teal-700 hover:bg-teal-100"
                     >
                         <ClipboardList className="h-4 w-4" />
@@ -465,7 +473,7 @@ export default function DocumentosPacientePage() {
                     </Link>
 
                     <Link
-                        href={`/ordenes-estudio/${paciente.id}`}
+                        href={`/ordenes-estudio/${paciente?.id || pacienteId}`}
                         className="flex items-center gap-2 rounded-xl bg-indigo-50 px-4 py-3 text-[12px] font-bold text-indigo-700 hover:bg-indigo-100"
                     >
                         <FileText className="h-4 w-4" />
@@ -493,9 +501,11 @@ export default function DocumentosPacientePage() {
                         <p className="mono text-[10px] font-bold uppercase tracking-[0.14em] text-white/40">
                             Paciente
                         </p>
-                        <h3 className="mt-2 text-xl font-black">{paciente.nombre}</h3>
+                        <h3 className="mt-2 text-xl font-black">
+                            {paciente?.nombre || "Cargando..."}
+                        </h3>
                         <p className="mt-1 text-xs text-white/50">
-                            Cédula: {paciente.cedula || "No registrada"}
+                            Cédula: {paciente?.cedula || "No registrada"}
                         </p>
                     </div>
                 </div>
@@ -562,7 +572,7 @@ export default function DocumentosPacientePage() {
                         </div>
 
                         <p className="mt-1 text-xs text-slate-400">
-                            Recomendado: PDF, JPG, PNG o WEBP menores a 2.5 MB.
+                            Permitido: PDF, JPG, PNG, WEBP, DOC o DOCX menores a 10 MB.
                         </p>
                     </div>
 
@@ -652,16 +662,15 @@ export default function DocumentosPacientePage() {
                         </button>
                     </form>
 
-                    <div className="border-t border-black/[0.04] bg-amber-50 p-5">
+                    <div className="border-t border-black/[0.04] bg-emerald-50 p-5">
                         <div className="flex items-start gap-3">
-                            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-emerald-700" />
                             <div>
-                                <h4 className="text-sm font-black text-amber-800">
-                                    Nota técnica
+                                <h4 className="text-sm font-black text-emerald-800">
+                                    Storage privado
                                 </h4>
-                                <p className="mt-1 text-xs leading-5 text-amber-700">
-                                    Este guardado es temporal en el navegador. Más adelante lo
-                                    pasaremos a Supabase Storage para hacerlo profesional y seguro.
+                                <p className="mt-1 text-xs leading-5 text-emerald-700">
+                                    Los archivos se guardan en Supabase Storage privado. Los enlaces de vista previa son temporales.
                                 </p>
                             </div>
                         </div>
@@ -778,14 +787,14 @@ export default function DocumentosPacientePage() {
                                                 Ver
                                             </button>
 
-                                            <a
-                                                href={documento.dataUrl}
-                                                download={documento.nombreArchivo}
+                                            <button
+                                                type="button"
+                                                onClick={() => descargarDocumento(documento)}
                                                 className="flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100"
                                             >
                                                 <Download className="h-3.5 w-3.5" />
                                                 Descargar
-                                            </a>
+                                            </button>
 
                                             <button
                                                 type="button"
@@ -804,11 +813,12 @@ export default function DocumentosPacientePage() {
                                 <div className="rounded-3xl border border-dashed border-slate-300 bg-white/70 p-10 text-center">
                                     <XCircle className="mx-auto h-10 w-10 text-slate-300" />
                                     <h4 className="mt-3 text-sm font-black text-slate-700">
-                                        Sin documentos adjuntos
+                                        {cargando ? "Cargando documentos..." : "Sin documentos adjuntos"}
                                     </h4>
                                     <p className="mt-1 text-xs text-slate-400">
-                                        Adjuntá radiografías, fotos clínicas, PDFs o documentos del
-                                        paciente.
+                                        {cargando
+                                            ? "Consultando documentos desde Supabase."
+                                            : "Adjuntá radiografías, fotos clínicas, PDFs o documentos del paciente."}
                                     </p>
                                 </div>
                             )}

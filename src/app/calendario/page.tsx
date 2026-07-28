@@ -20,6 +20,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     listarCitasSupabase,
     type CitaSupabase,
@@ -203,7 +204,11 @@ export default function CalendarioPage() {
         setError("");
 
         try {
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const citasSupabase = await listarCitasSupabase();
 
@@ -438,10 +443,10 @@ export default function CalendarioPage() {
 
                                                 <p
                                                     className={`mt-1 text-2xl font-black ${actual
-                                                            ? "text-teal-700"
-                                                            : seleccionado
-                                                                ? "text-slate-900"
-                                                                : "text-slate-700"
+                                                        ? "text-teal-700"
+                                                        : seleccionado
+                                                            ? "text-slate-900"
+                                                            : "text-slate-700"
                                                         }`}
                                                 >
                                                     {dia.dia}
@@ -450,8 +455,8 @@ export default function CalendarioPage() {
 
                                             <span
                                                 className={`rounded-full px-2.5 py-1 text-[10px] font-black ${cantidadCitas > 0
-                                                        ? "bg-teal-600 text-white"
-                                                        : "bg-slate-100 text-slate-400"
+                                                    ? "bg-teal-600 text-white"
+                                                    : "bg-slate-100 text-slate-400"
                                                     }`}
                                             >
                                                 {cantidadCitas}

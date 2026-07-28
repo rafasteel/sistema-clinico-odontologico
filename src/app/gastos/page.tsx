@@ -26,6 +26,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     actualizarGastoSupabase,
     anularGastoSupabase,
@@ -204,7 +205,11 @@ export default function GastosPage() {
                 setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
             }
 
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const gastosSupabase = await listarGastosSupabase(mes);
             setGastos(gastosSupabase.map(convertirGasto));

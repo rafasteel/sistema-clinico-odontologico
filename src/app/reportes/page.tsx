@@ -25,6 +25,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     listarCuentasCobrarSupabase,
     listarVentasSupabase,
@@ -239,17 +240,176 @@ function porcentaje(valor: number, total: number) {
     return Math.min((valor / total) * 100, 100);
 }
 
-function descargarCSV(nombreArchivo: string, filas: string[][]) {
-    const contenido = filas
-        .map((fila) =>
-            fila
-                .map((celda) => `"${String(celda).replaceAll('"', '""')}"`)
-                .join(",")
-        )
-        .join("\n");
+type CeldaExcel =
+    | string
+    | number
+    | {
+        valor: string | number;
+        clase?: string;
+    };
 
-    const blob = new Blob([contenido], {
-        type: "text/csv;charset=utf-8;",
+function escaparHTML(valor: unknown) {
+    return String(valor ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function celdaExcel(celda: CeldaExcel) {
+    if (typeof celda === "object" && celda !== null && "valor" in celda) {
+        return `<td class="${celda.clase || ""}">${escaparHTML(celda.valor)}</td>`;
+    }
+
+    return `<td>${escaparHTML(celda)}</td>`;
+}
+
+function tablaExcel(titulo: string, encabezados: string[], filas: CeldaExcel[][]) {
+    const filasHTML =
+        filas.length > 0
+            ? filas
+                .map((fila) => `<tr>${fila.map(celdaExcel).join("")}</tr>`)
+                .join("")
+            : `<tr><td colspan="${encabezados.length}" class="sin-datos">Sin datos registrados</td></tr>`;
+
+    return `
+        <h2>${escaparHTML(titulo)}</h2>
+        <table>
+            <thead>
+                <tr>
+                    ${encabezados.map((encabezado) => `<th>${escaparHTML(encabezado)}</th>`).join("")}
+                </tr>
+            </thead>
+            <tbody>
+                ${filasHTML}
+            </tbody>
+        </table>
+    `;
+}
+
+function descargarExcel(nombreArchivo: string, cuerpoHTML: string) {
+    const documento = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office"
+              xmlns:x="urn:schemas-microsoft-com:office:excel"
+              xmlns="http://www.w3.org/TR/REC-html40">
+            <head>
+                <meta charset="UTF-8" />
+                <!--[if gte mso 9]>
+                <xml>
+                    <x:ExcelWorkbook>
+                        <x:ExcelWorksheets>
+                            <x:ExcelWorksheet>
+                                <x:Name>Reporte financiero</x:Name>
+                                <x:WorksheetOptions>
+                                    <x:DisplayGridlines/>
+                                    <x:FitToPage/>
+                                </x:WorksheetOptions>
+                            </x:ExcelWorksheet>
+                        </x:ExcelWorksheets>
+                    </x:ExcelWorkbook>
+                </xml>
+                <![endif]-->
+                <style>
+                    body {
+                        font-family: Arial, sans-serif;
+                        color: #0f172a;
+                    }
+
+                    .titulo-principal {
+                        background: #0f172a;
+                        color: #ffffff;
+                        font-size: 24px;
+                        font-weight: 800;
+                        padding: 18px;
+                        border: 1px solid #0f172a;
+                    }
+
+                    .subtitulo {
+                        background: #e2e8f0;
+                        color: #334155;
+                        font-size: 12px;
+                        font-weight: 700;
+                        padding: 10px 18px;
+                        border: 1px solid #cbd5e1;
+                    }
+
+                    h2 {
+                        margin-top: 24px;
+                        margin-bottom: 8px;
+                        color: #0f172a;
+                        font-size: 16px;
+                        font-weight: 800;
+                    }
+
+                    table {
+                        border-collapse: collapse;
+                        width: 100%;
+                        margin-bottom: 18px;
+                    }
+
+                    th {
+                        background: #0f766e;
+                        color: #ffffff;
+                        border: 1px solid #0f766e;
+                        font-size: 12px;
+                        font-weight: 800;
+                        padding: 9px;
+                        text-align: left;
+                    }
+
+                    td {
+                        border: 1px solid #cbd5e1;
+                        font-size: 11px;
+                        padding: 8px;
+                        vertical-align: top;
+                    }
+
+                    tr:nth-child(even) td {
+                        background: #f8fafc;
+                    }
+
+                    .monto {
+                        text-align: right;
+                        font-weight: 700;
+                        white-space: nowrap;
+                    }
+
+                    .positivo {
+                        color: #047857;
+                        font-weight: 800;
+                    }
+
+                    .negativo {
+                        color: #b91c1c;
+                        font-weight: 800;
+                    }
+
+                    .alerta {
+                        color: #b45309;
+                        font-weight: 800;
+                    }
+
+                    .kpi {
+                        background: #f1f5f9;
+                        font-weight: 800;
+                    }
+
+                    .sin-datos {
+                        color: #64748b;
+                        text-align: center;
+                        font-style: italic;
+                    }
+                </style>
+            </head>
+            <body>
+                ${cuerpoHTML}
+            </body>
+        </html>
+    `;
+
+    const blob = new Blob([documento], {
+        type: "application/vnd.ms-excel;charset=utf-8;",
     });
 
     const url = URL.createObjectURL(blob);
@@ -450,7 +610,11 @@ export default function ReportesPage() {
         setError("");
 
         try {
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const fechaInicio = `${mesSeleccionado}-01`;
             const fechaFin = ultimoDiaMes(mesSeleccionado);
@@ -690,28 +854,194 @@ export default function ReportesPage() {
         );
     });
 
-    function exportarResumenCSV() {
-        descargarCSV(`reporte-financiero-${mesSeleccionado}.csv`, [
-            ["Reporte financiero", mesSeleccionado],
-            ["Clínica", configuracion.nombreClinica],
-            ["Fuente principal", "Supabase"],
-            [],
-            ["Indicador", "Valor"],
-            ["Ventas brutas", ventasBrutas.toString()],
-            ["Ingresos cobrados", ingresosCobrados.toString()],
-            ["Efectivo", efectivo.toString()],
-            ["Tarjeta", tarjeta.toString()],
-            ["Neto tarjeta", netoTarjeta.toString()],
-            ["Transferencia", transferencia.toString()],
-            ["Crédito generado", creditoGenerado.toString()],
-            ["Comisión POS", comisionPOS.toString()],
-            ["Gastos activos", gastosTotal.toString()],
-            ["Utilidad operativa estimada", utilidadOperativa.toString()],
-            ["Cuentas por cobrar pendientes", totalPorCobrar.toString()],
-            ["Cuentas por pagar pendientes", totalPorPagar.toString()],
-            ["Valor inventario costo", valorInventarioCosto.toString()],
-            ["Valor inventario venta", valorInventarioVenta.toString()],
+    function exportarResumenExcel() {
+        const claseResultado = utilidadOperativa >= 0 ? "positivo" : "negativo";
+
+        const encabezado = `
+            <div class="titulo-principal">Reporte financiero</div>
+            <div class="subtitulo">
+                Clínica: ${escaparHTML(configuracion.nombreClinica)} |
+                Período: ${escaparHTML(mesSeleccionado)} |
+                Fuente: Supabase |
+                Generado: ${escaparHTML(fechaHoyLocal())}
+            </div>
+        `;
+
+        const resumen = tablaExcel("Resumen general", ["Indicador", "Valor"], [
+            ["Ventas brutas", { valor: formatoMoneda(ventasBrutas, configuracion.simboloMoneda), clase: "monto kpi" }],
+            ["Ingresos cobrados", { valor: formatoMoneda(ingresosCobrados, configuracion.simboloMoneda), clase: "monto kpi" }],
+            ["Efectivo", { valor: formatoMoneda(efectivo, configuracion.simboloMoneda), clase: "monto" }],
+            ["Tarjeta", { valor: formatoMoneda(tarjeta, configuracion.simboloMoneda), clase: "monto" }],
+            ["Neto tarjeta", { valor: formatoMoneda(netoTarjeta, configuracion.simboloMoneda), clase: "monto" }],
+            ["Transferencia", { valor: formatoMoneda(transferencia, configuracion.simboloMoneda), clase: "monto" }],
+            ["Crédito generado", { valor: formatoMoneda(creditoGenerado, configuracion.simboloMoneda), clase: "monto alerta" }],
+            ["Comisión POS", { valor: formatoMoneda(comisionPOS, configuracion.simboloMoneda), clase: "monto alerta" }],
+            ["Gastos activos", { valor: formatoMoneda(gastosTotal, configuracion.simboloMoneda), clase: "monto negativo" }],
+            ["Utilidad operativa estimada", { valor: formatoMoneda(utilidadOperativa, configuracion.simboloMoneda), clase: `monto ${claseResultado}` }],
+            ["Margen operativo", { valor: `${margenOperativo.toFixed(2)}%`, clase: "monto" }],
+            ["Cuentas por cobrar pendientes", { valor: formatoMoneda(totalPorCobrar, configuracion.simboloMoneda), clase: "monto alerta" }],
+            ["Cuentas por pagar pendientes", { valor: formatoMoneda(totalPorPagar, configuracion.simboloMoneda), clase: "monto negativo" }],
+            ["Valor inventario al costo", { valor: formatoMoneda(valorInventarioCosto, configuracion.simboloMoneda), clase: "monto" }],
+            ["Valor inventario venta estimada", { valor: formatoMoneda(valorInventarioVenta, configuracion.simboloMoneda), clase: "monto" }],
         ]);
+
+        const distribucionIngresos = tablaExcel(
+            "Distribución de ingresos",
+            ["Forma de pago", "Monto", "Participación"],
+            [
+                ["Efectivo", { valor: formatoMoneda(efectivo, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(efectivo, ventasBrutas || ingresosCobrados).toFixed(0)}%`],
+                ["Tarjeta", { valor: formatoMoneda(tarjeta, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(tarjeta, ventasBrutas || ingresosCobrados).toFixed(0)}%`],
+                ["Transferencia", { valor: formatoMoneda(transferencia, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(transferencia, ventasBrutas || ingresosCobrados).toFixed(0)}%`],
+                ["Crédito", { valor: formatoMoneda(creditoGenerado, configuracion.simboloMoneda), clase: "monto alerta" }, `${porcentaje(creditoGenerado, ventasBrutas || ingresosCobrados).toFixed(0)}%`],
+            ]
+        );
+
+        const ventasTipo = tablaExcel(
+            "Ventas por tipo",
+            ["Tipo", "Total"],
+            ventasPorTipo.map((item) => [
+                item.tipo,
+                { valor: formatoMoneda(item.total, configuracion.simboloMoneda), clase: "monto" },
+            ])
+        );
+
+        const gastosCategoria = tablaExcel(
+            "Gastos por categoría",
+            ["Categoría", "Total"],
+            gastosPorCategoria.map((item) => [
+                item.categoria || "Sin categoría",
+                { valor: formatoMoneda(item.total, configuracion.simboloMoneda), clase: "monto negativo" },
+            ])
+        );
+
+        const cuentasCobrarTabla = tablaExcel(
+            "Cuentas por cobrar pendientes",
+            ["Paciente", "Concepto", "Fecha", "Vencimiento", "Estado", "Saldo"],
+            cuentasCobrarPendientes.map((cuenta) => [
+                cuenta.pacienteNombre,
+                cuenta.concepto,
+                cuenta.fecha,
+                cuenta.fechaVencimiento || "Sin vencimiento",
+                estadoVisualCuenta(cuenta.fechaVencimiento, cuenta.estado),
+                { valor: formatoMoneda(cuenta.saldo, configuracion.simboloMoneda), clase: "monto alerta" },
+            ])
+        );
+
+        const cuentasPagarTabla = tablaExcel(
+            "Cuentas por pagar pendientes",
+            ["Proveedor", "Concepto", "Fecha", "Vencimiento", "Estado", "Saldo"],
+            cuentasPagarPendientes.map((cuenta) => [
+                cuenta.proveedorNombre,
+                cuenta.concepto,
+                cuenta.fecha,
+                cuenta.fechaVencimiento || "Sin vencimiento",
+                estadoVisualCuenta(cuenta.fechaVencimiento, cuenta.estado),
+                { valor: formatoMoneda(cuenta.saldo, configuracion.simboloMoneda), clase: "monto negativo" },
+            ])
+        );
+
+        const ventasTabla = tablaExcel(
+            "Detalle de ventas del período",
+            ["Fecha", "Hora", "Cliente", "Concepto", "Tipo", "Estado", "Total", "Efectivo", "Tarjeta", "Transferencia", "Crédito"],
+            ventasPeriodo.map((venta) => [
+                venta.fecha,
+                venta.hora,
+                venta.clienteNombre,
+                venta.concepto,
+                venta.tipoCobro,
+                venta.estado,
+                { valor: formatoMoneda(venta.total, configuracion.simboloMoneda), clase: "monto" },
+                { valor: formatoMoneda(venta.efectivo, configuracion.simboloMoneda), clase: "monto" },
+                { valor: formatoMoneda(venta.tarjeta, configuracion.simboloMoneda), clase: "monto" },
+                { valor: formatoMoneda(venta.transferencia, configuracion.simboloMoneda), clase: "monto" },
+                { valor: formatoMoneda(venta.credito, configuracion.simboloMoneda), clase: "monto alerta" },
+            ])
+        );
+
+        const gastosTabla = tablaExcel(
+            "Detalle de gastos del período",
+            ["Fecha", "Hora", "Categoría", "Descripción", "Método", "Proveedor", "Usuario", "Monto"],
+            gastosPeriodo.map((gasto) => [
+                gasto.fecha,
+                gasto.hora,
+                gasto.categoria,
+                gasto.descripcion,
+                gasto.metodoPago,
+                gasto.proveedor || "Sin proveedor",
+                gasto.usuarioNombre || "No identificado",
+                { valor: formatoMoneda(gasto.monto, configuracion.simboloMoneda), clase: "monto negativo" },
+            ])
+        );
+
+        const comprasTabla = tablaExcel(
+            "Compras del período",
+            ["Fecha", "Proveedor", "Producto", "Cantidad", "Costo unitario", "Total", "Pagado", "Crédito", "Estado"],
+            comprasPeriodo.map((compra) => [
+                compra.fecha,
+                compra.proveedorNombre,
+                compra.productoNombre,
+                compra.cantidad,
+                { valor: formatoMoneda(compra.costoUnitario, configuracion.simboloMoneda), clase: "monto" },
+                { valor: formatoMoneda(compra.total, configuracion.simboloMoneda), clase: "monto" },
+                { valor: formatoMoneda(compra.pagoAhora, configuracion.simboloMoneda), clase: "monto" },
+                { valor: formatoMoneda(compra.credito, configuracion.simboloMoneda), clase: "monto alerta" },
+                compra.estado,
+            ])
+        );
+
+        const inventarioTabla = tablaExcel(
+            "Inventario bajo stock",
+            ["Código", "Producto", "Categoría", "Stock", "Mínimo", "Costo", "Precio venta", "Proveedor"],
+            productosBajoStock.map((producto) => [
+                producto.codigo,
+                producto.nombre,
+                producto.categoria,
+                producto.stock,
+                producto.stockMinimo,
+                { valor: formatoMoneda(producto.costoCompra, configuracion.simboloMoneda), clase: "monto" },
+                { valor: formatoMoneda(producto.precioVenta, configuracion.simboloMoneda), clase: "monto" },
+                producto.proveedor,
+            ])
+        );
+
+        const cierresTabla = tablaExcel(
+            "Cierres de caja del período",
+            ["Fecha", "Hora", "Usuario", "Ventas", "Efectivo contado", "Tarjeta reportada", "Transferencia reportada", "Diferencia", "Estado"],
+            cierresPeriodo.map((cierre) => {
+                const diferencia =
+                    cierre.diferenciaEfectivo +
+                    cierre.diferenciaTarjeta +
+                    cierre.diferenciaTransferencia;
+
+                return [
+                    cierre.fecha,
+                    cierre.hora,
+                    cierre.usuarioNombre,
+                    cierre.ventasCantidad,
+                    { valor: formatoMoneda(cierre.efectivoContado, configuracion.simboloMoneda), clase: "monto" },
+                    { valor: formatoMoneda(cierre.tarjetaReportada, configuracion.simboloMoneda), clase: "monto" },
+                    { valor: formatoMoneda(cierre.transferenciaReportada, configuracion.simboloMoneda), clase: "monto" },
+                    { valor: formatoMoneda(diferencia, configuracion.simboloMoneda), clase: `monto ${diferencia >= 0 ? "positivo" : "negativo"}` },
+                    cierre.estado,
+                ];
+            })
+        );
+
+        descargarExcel(
+            `reporte-financiero-${mesSeleccionado}.xls`,
+            encabezado +
+            resumen +
+            distribucionIngresos +
+            ventasTipo +
+            gastosCategoria +
+            cuentasCobrarTabla +
+            cuentasPagarTabla +
+            ventasTabla +
+            gastosTabla +
+            comprasTabla +
+            inventarioTabla +
+            cierresTabla
+        );
     }
 
     return (
@@ -836,11 +1166,11 @@ export default function ReportesPage() {
                         </button>
 
                         <button
-                            onClick={exportarResumenCSV}
+                            onClick={exportarResumenExcel}
                             className="flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800"
                         >
                             <Download className="h-4 w-4" />
-                            Exportar CSV
+                            Exportar Excel
                         </button>
                     </div>
                 </div>
@@ -905,16 +1235,16 @@ export default function ReportesPage() {
                     <div className="flex items-start justify-between">
                         <div
                             className={`flex h-10 w-10 items-center justify-center rounded-xl ${utilidadOperativa >= 0
-                                    ? "bg-teal-50 text-teal-700"
-                                    : "bg-red-50 text-red-700"
+                                ? "bg-teal-50 text-teal-700"
+                                : "bg-red-50 text-red-700"
                                 }`}
                         >
                             <Wallet className="h-[18px] w-[18px]" />
                         </div>
                         <span
                             className={`mono rounded-full px-2 py-0.5 text-[10px] font-bold ${utilidadOperativa >= 0
-                                    ? "bg-teal-50 text-teal-700"
-                                    : "bg-red-50 text-red-700"
+                                ? "bg-teal-50 text-teal-700"
+                                : "bg-red-50 text-red-700"
                                 }`}
                         >
                             Neto
@@ -1024,8 +1354,8 @@ export default function ReportesPage() {
 
                                     <div
                                         className={`rounded-2xl px-4 py-3 text-sm font-black ${utilidadOperativa >= 0
-                                                ? "bg-emerald-500/15 text-emerald-300"
-                                                : "bg-red-500/15 text-red-300"
+                                            ? "bg-emerald-500/15 text-emerald-300"
+                                            : "bg-red-500/15 text-red-300"
                                             }`}
                                     >
                                         {utilidadOperativa >= 0 ? "Resultado positivo" : "Resultado negativo"}
@@ -1151,12 +1481,12 @@ export default function ReportesPage() {
                                             <td className="px-4 py-4">
                                                 <span
                                                     className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${venta.estado === "Pagada"
-                                                            ? "bg-emerald-50 text-emerald-700"
-                                                            : venta.estado === "Parcial"
-                                                                ? "bg-amber-50 text-amber-700"
-                                                                : venta.estado === "Anulada"
-                                                                    ? "bg-red-50 text-red-700"
-                                                                    : "bg-blue-50 text-blue-700"
+                                                        ? "bg-emerald-50 text-emerald-700"
+                                                        : venta.estado === "Parcial"
+                                                            ? "bg-amber-50 text-amber-700"
+                                                            : venta.estado === "Anulada"
+                                                                ? "bg-red-50 text-red-700"
+                                                                : "bg-blue-50 text-blue-700"
                                                         }`}
                                                 >
                                                     {venta.estado}

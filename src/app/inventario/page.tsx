@@ -28,6 +28,7 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 
 import {
     actualizarProductoInventarioSupabase,
@@ -103,8 +104,6 @@ type FormularioMovimiento = {
     motivo: string;
 };
 
-const productosIniciales: Producto[] = [];
-
 const formularioProductoVacio: FormularioProducto = {
     codigo: "",
     nombre: "",
@@ -133,14 +132,6 @@ function fechaHoyLocal() {
     const day = String(fecha.getDate()).padStart(2, "0");
 
     return `${year}-${month}-${day}`;
-}
-
-function horaActualLocal() {
-    const fecha = new Date();
-    const hours = String(fecha.getHours()).padStart(2, "0");
-    const minutes = String(fecha.getMinutes()).padStart(2, "0");
-
-    return `${hours}:${minutes}`;
 }
 
 function numero(valor: string | number | null | undefined) {
@@ -181,7 +172,6 @@ function colorMovimiento(tipo: TipoMovimiento) {
 
     return "bg-amber-50 text-amber-700";
 }
-
 
 function horaCorta(valor: string) {
     return String(valor || "").slice(0, 5);
@@ -269,7 +259,11 @@ export default function InventarioPage() {
                 setUsuario(JSON.parse(usuarioGuardado) as UsuarioSistema);
             }
 
-            setConfiguracion(obtenerConfiguracionClinica());
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
 
             const [productosSupabase, movimientosSupabase] = await Promise.all([
                 listarProductosInventarioSupabase(),

@@ -3,12 +3,24 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, ClipboardList, FileText, Printer } from "lucide-react";
+import {
+    ArrowLeft,
+    ClipboardList,
+    FileText,
+    Printer,
+    RefreshCcw,
+} from "lucide-react";
 import {
     ConfiguracionClinica,
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import { crearClienteSupabase } from "@/lib/supabase/client";
+import {
+    obtenerPacienteSupabase,
+    type PacienteSupabase,
+} from "@/lib/supabase/pacientes";
 
 type Paciente = {
     id: string;
@@ -26,7 +38,16 @@ type Paciente = {
     ultimaCita: string;
 };
 
-const PACIENTES_KEY = "pacientes_sistema_clinico";
+type ResultadoPacienteFlexible =
+    | PacienteSupabase
+    | null
+    | undefined
+    | {
+        paciente?: PacienteSupabase | null;
+        data?: PacienteSupabase | null;
+        datos?: PacienteSupabase | null;
+        error?: string | null;
+    };
 
 function fechaHoyLocal() {
     const fecha = new Date();
@@ -37,17 +58,73 @@ function fechaHoyLocal() {
     return `${year}-${month}-${day}`;
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
+function texto(valor: unknown, respaldo = "") {
+    const convertido = String(valor ?? "").trim();
 
-    try {
-        const datos = localStorage.getItem(clave);
-        if (!datos) return valorInicial;
+    return convertido || respaldo;
+}
 
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
+function numero(valor: unknown) {
+    const convertido = Number(valor || 0);
+
+    if (Number.isNaN(convertido)) return 0;
+
+    return convertido;
+}
+
+function extraerPacienteResultado(resultado: ResultadoPacienteFlexible) {
+    if (!resultado) return null;
+
+    const resultadoRecord = resultado as Record<string, unknown>;
+
+    if (resultadoRecord.paciente) {
+        return resultadoRecord.paciente as PacienteSupabase;
     }
+
+    if (resultadoRecord.data) {
+        return resultadoRecord.data as PacienteSupabase;
+    }
+
+    if (resultadoRecord.datos) {
+        return resultadoRecord.datos as PacienteSupabase;
+    }
+
+    if (resultadoRecord.id) {
+        return resultado as PacienteSupabase;
+    }
+
+    return null;
+}
+
+function convertirPacienteSupabase(pacienteSupabase: PacienteSupabase): Paciente {
+    const paciente = pacienteSupabase as PacienteSupabase & Record<string, unknown>;
+
+    return {
+        id: texto(paciente.id),
+        nombre: texto(paciente.nombre),
+        telefono: texto(paciente.telefono || paciente.whatsapp),
+        cedula: texto(paciente.cedula),
+        fechaNacimiento: texto(
+            paciente.fecha_nacimiento || paciente.fechaNacimiento
+        ),
+        direccion: texto(paciente.direccion),
+        alergias: texto(paciente.alergias),
+        enfermedades: texto(
+            paciente.enfermedades ||
+            paciente.enfermedades_sistemicas ||
+            paciente.enfermedadesSistemicas ||
+            paciente.antecedentes
+        ),
+        medicamentos: texto(
+            paciente.medicamentos ||
+            paciente.medicamentos_actuales ||
+            paciente.medicamentosActuales
+        ),
+        observaciones: texto(paciente.observaciones),
+        estado: texto(paciente.estado, "Activo") === "Inactivo" ? "Inactivo" : "Activo",
+        saldoPendiente: numero(paciente.saldo_pendiente || paciente.saldoPendiente),
+        ultimaCita: texto(paciente.ultima_cita || paciente.ultimaCita),
+    };
 }
 
 function fechaLegible(fecha: string) {
@@ -78,16 +155,32 @@ function calcularEdad(fechaNacimiento: string) {
 }
 
 function tieneAlerta(valor: string) {
-    const texto = valor.trim().toLowerCase();
+    const textoAlerta = valor.trim().toLowerCase();
 
-    if (!texto) return false;
-    if (texto === "no") return false;
-    if (texto === "ninguna") return false;
-    if (texto === "ninguno") return false;
-    if (texto === "no refiere") return false;
-    if (texto === "ninguna registrada") return false;
+    if (!textoAlerta) return false;
+    if (textoAlerta === "no") return false;
+    if (textoAlerta === "ninguna") return false;
+    if (textoAlerta === "ninguno") return false;
+    if (textoAlerta === "no refiere") return false;
+    if (textoAlerta === "ninguna registrada") return false;
 
     return true;
+}
+
+async function obtenerPacienteDirectoSupabase(pacienteId: string) {
+    const supabase = crearClienteSupabase();
+
+    const { data, error } = await supabase
+        .from("pacientes")
+        .select("*")
+        .eq("id", pacienteId)
+        .maybeSingle();
+
+    if (error) {
+        throw new Error(error.message);
+    }
+
+    return data as PacienteSupabase | null;
 }
 
 export default function ConsentimientoPacientePage() {
@@ -98,6 +191,8 @@ export default function ConsentimientoPacientePage() {
         CONFIGURACION_PREDETERMINADA
     );
     const [paciente, setPaciente] = useState<Paciente | null>(null);
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
 
     const [procedimiento, setProcedimiento] = useState(
         "Procedimiento odontológico indicado por el profesional tratante"
@@ -105,16 +200,77 @@ export default function ConsentimientoPacientePage() {
     const [doctor, setDoctor] = useState("");
     const [observaciones, setObservaciones] = useState("");
 
-    useEffect(() => {
-        const config = obtenerConfiguracionClinica();
-        const pacientes = leerLocalStorage<Paciente[]>(PACIENTES_KEY, []);
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
 
-        setConfiguracion(config);
-        setPaciente(pacientes.find((item) => item.id === pacienteId) || null);
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            let pacienteEncontrado: PacienteSupabase | null = null;
+
+            try {
+                const resultado = (await obtenerPacienteSupabase(
+                    pacienteId
+                )) as ResultadoPacienteFlexible;
+
+                pacienteEncontrado = extraerPacienteResultado(resultado);
+            } catch {
+                pacienteEncontrado = null;
+            }
+
+            if (!pacienteEncontrado) {
+                pacienteEncontrado = await obtenerPacienteDirectoSupabase(pacienteId);
+            }
+
+            setPaciente(
+                pacienteEncontrado
+                    ? convertirPacienteSupabase(pacienteEncontrado)
+                    : null
+            );
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo cargar el consentimiento desde Supabase.";
+
+            setError(mensaje);
+            setPaciente(null);
+        } finally {
+            setCargando(false);
+        }
+    }
+
+    useEffect(() => {
+        cargarDatos();
     }, [pacienteId]);
 
     function imprimir() {
         window.print();
+    }
+
+    if (cargando) {
+        return (
+            <main className="min-h-screen bg-slate-100 p-6">
+                <section className="mx-auto max-w-3xl rounded-3xl bg-white p-10 text-center shadow-sm">
+                    <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-3xl bg-teal-50 text-teal-700">
+                        <RefreshCcw className="h-8 w-8 animate-spin" />
+                    </div>
+
+                    <h1 className="mt-5 text-2xl font-black text-slate-900">
+                        Cargando consentimiento
+                    </h1>
+
+                    <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
+                        Consultando el paciente y la configuración desde Supabase.
+                    </p>
+                </section>
+            </main>
+        );
     }
 
     if (!paciente) {
@@ -130,16 +286,28 @@ export default function ConsentimientoPacientePage() {
                     </h1>
 
                     <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                        No encontramos el paciente solicitado para generar el consentimiento.
+                        {error ||
+                            `No encontramos el paciente solicitado en Supabase. ID consultado: ${pacienteId}`}
                     </p>
 
-                    <Link
-                        href="/pacientes"
-                        className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800"
-                    >
-                        <ArrowLeft className="h-4 w-4" />
-                        Volver a pacientes
-                    </Link>
+                    <div className="mt-6 flex flex-wrap justify-center gap-2">
+                        <Link
+                            href="/pacientes"
+                            className="inline-flex items-center gap-2 rounded-2xl bg-slate-900 px-5 py-3 text-sm font-bold text-white hover:bg-slate-800"
+                        >
+                            <ArrowLeft className="h-4 w-4" />
+                            Volver a pacientes
+                        </Link>
+
+                        <button
+                            type="button"
+                            onClick={cargarDatos}
+                            className="inline-flex items-center gap-2 rounded-2xl bg-white px-5 py-3 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                        >
+                            <RefreshCcw className="h-4 w-4" />
+                            Reintentar
+                        </button>
+                    </div>
                 </section>
             </main>
         );
@@ -218,6 +386,15 @@ export default function ConsentimientoPacientePage() {
                 </Link>
 
                 <div className="flex flex-wrap gap-2">
+                    <button
+                        type="button"
+                        onClick={cargarDatos}
+                        className="flex items-center gap-2 rounded-xl bg-white px-4 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                    >
+                        <RefreshCcw className="h-4 w-4" />
+                        Recargar
+                    </button>
+
                     <Link
                         href={`/expediente/${paciente.id}`}
                         className="flex items-center gap-2 rounded-xl bg-teal-50 px-4 py-3 text-[12px] font-bold text-teal-700 hover:bg-teal-100"
@@ -235,6 +412,15 @@ export default function ConsentimientoPacientePage() {
                         Imprimir / Guardar PDF
                     </button>
                 </div>
+            </section>
+
+            <section className="no-print mx-auto mb-4 max-w-4xl rounded-2xl border border-teal-100 bg-teal-50 p-4">
+                <p className="text-xs font-black uppercase tracking-[0.16em] text-teal-700">
+                    Consentimiento conectado a Supabase
+                </p>
+                <p className="mt-1 text-xs font-semibold text-teal-700">
+                    Los datos del paciente y la configuración se consultan desde la base real de la clínica.
+                </p>
             </section>
 
             <section className="no-print mx-auto mb-4 max-w-4xl rounded-2xl bg-white p-5 shadow-sm">

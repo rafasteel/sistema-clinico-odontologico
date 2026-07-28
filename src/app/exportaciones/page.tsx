@@ -16,7 +16,6 @@ import {
     ReceiptText,
     RefreshCcw,
     Search,
-    ShieldAlert,
     Table2,
     Truck,
     Users,
@@ -28,6 +27,20 @@ import {
     CONFIGURACION_PREDETERMINADA,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
+    cargarDatosExportacionesSupabase,
+    type CierreCajaExportacion,
+    type CitaExportacion,
+    type CompraProveedorExportacion,
+    type CuentaPorCobrarExportacion,
+    type CuentaPorPagarExportacion,
+    type GastoExportacion,
+    type PacienteExportacion,
+    type ProductoExportacion,
+    type ProveedorExportacion,
+    type VentaExportacion,
+} from "@/lib/supabase/exportaciones";
 
 type TipoColumnaExcel = "texto" | "numero" | "moneda" | "fecha" | "estado";
 
@@ -55,210 +68,6 @@ type ResumenItem = {
     comentario: string;
 };
 
-type Paciente = {
-    id: string;
-    nombre: string;
-    telefono: string;
-    cedula: string;
-    fechaNacimiento: string;
-    direccion: string;
-    alergias: string;
-    enfermedades: string;
-    medicamentos: string;
-    observaciones: string;
-    estado: "Activo" | "Inactivo";
-    saldoPendiente: number;
-    ultimaCita: string;
-};
-
-type EstadoVenta = "Pagada" | "Parcial" | "Crédito" | "Anulada";
-
-type Venta = {
-    id: string;
-    fecha: string;
-    hora: string;
-    tipoCobro: string;
-    citaId: string;
-    pacienteId: string;
-    clienteNombre: string;
-    concepto: string;
-    total: number;
-    efectivo: number;
-    tarjeta: number;
-    transferencia: number;
-    credito: number;
-    estado: EstadoVenta;
-    usuarioNombre: string;
-    observaciones: string;
-    productoId?: string;
-    productoNombre?: string;
-    cantidadProducto?: number;
-};
-
-type EstadoGasto = "Activo" | "Anulado";
-
-type Gasto = {
-    id: string;
-    fecha: string;
-    hora: string;
-    categoria: string;
-    descripcion: string;
-    monto: number;
-    metodoPago: string;
-    proveedor: string;
-    usuarioNombre: string;
-    observaciones: string;
-    estado: EstadoGasto;
-};
-
-type EstadoProducto = "Activo" | "Inactivo";
-
-type Producto = {
-    id: string;
-    codigo: string;
-    nombre: string;
-    categoria: string;
-    unidad: string;
-    stock: number;
-    stockMinimo: number;
-    costoCompra: number;
-    precioVenta: number;
-    proveedor: string;
-    vencimiento: string;
-    estado: EstadoProducto;
-};
-
-type Proveedor = {
-    id: string;
-    nombre: string;
-    ruc: string;
-    telefono: string;
-    whatsapp: string;
-    correo: string;
-    direccion: string;
-    categoria: string;
-    contacto: string;
-    estado: "Activo" | "Inactivo";
-    observaciones: string;
-};
-
-type EstadoCita =
-    | "Programada"
-    | "Confirmada"
-    | "En espera"
-    | "En atención"
-    | "Atendida"
-    | "Cobrada"
-    | "Reagendada"
-    | "Cancelada"
-    | "No asistió";
-
-type Cita = {
-    id: string;
-    pacienteId: string;
-    pacienteNombre: string;
-    doctorId: string;
-    doctorNombre: string;
-    servicioId: string;
-    servicioNombre: string;
-    costo: number;
-    fecha: string;
-    hora: string;
-    recurrencia: string;
-    estado: EstadoCita;
-    observaciones: string;
-    creadaEn: string;
-};
-
-type EstadoCuenta = "Pendiente" | "Parcial" | "Pagada" | "Vencida" | "Anulada";
-
-type CuentaPorCobrar = {
-    id: string;
-    ventaId: string;
-    pacienteId: string;
-    pacienteNombre: string;
-    concepto: string;
-    total: number;
-    saldo: number;
-    fecha: string;
-    fechaVencimiento: string;
-    estado: EstadoCuenta;
-    abonos: unknown[];
-};
-
-type EstadoCuentaPagar =
-    | "Pendiente"
-    | "Parcial"
-    | "Pagada"
-    | "Vencida"
-    | "Anulada";
-
-type CuentaPorPagar = {
-    id: string;
-    compraId: string;
-    proveedorId: string;
-    proveedorNombre: string;
-    concepto: string;
-    total: number;
-    saldo: number;
-    fecha: string;
-    fechaVencimiento: string;
-    estado: EstadoCuentaPagar;
-    abonos: unknown[];
-};
-
-type EstadoCompra = "Activa" | "Anulada";
-
-type CompraProveedor = {
-    id: string;
-    fecha: string;
-    hora: string;
-    proveedorId: string;
-    proveedorNombre: string;
-    productoId: string;
-    productoNombre: string;
-    cantidad: number;
-    costoUnitario: number;
-    total: number;
-    pagoAhora: number;
-    credito: number;
-    metodoPago: string;
-    fechaVencimiento: string;
-    estado: EstadoCompra;
-    usuarioNombre: string;
-    observaciones: string;
-    gastoId: string;
-    cuentaPagarId: string;
-};
-
-type CierreCaja = {
-    id: string;
-    fecha: string;
-    hora: string;
-    usuarioNombre: string;
-    ventasCantidad: number;
-    ventasBrutas: number;
-    efectivoSistema: number;
-    tarjetaSistema: number;
-    transferenciaSistema: number;
-    creditoGenerado: number;
-    gastosEfectivo: number;
-    gastosTarjeta: number;
-    gastosTransferencia: number;
-    gastosTotal: number;
-    comisionPOS: number;
-    netoTarjeta: number;
-    efectivoEsperado: number;
-    efectivoContado: number;
-    tarjetaReportada: number;
-    transferenciaReportada: number;
-    diferenciaEfectivo: number;
-    diferenciaTarjeta: number;
-    diferenciaTransferencia: number;
-    estado: "Cuadrado" | "Con diferencia";
-    observaciones: string;
-};
-
 function fechaHoyLocal() {
     const fecha = new Date();
     const year = fecha.getFullYear();
@@ -272,18 +81,12 @@ function mesActualLocal() {
     return fechaHoyLocal().slice(0, 7);
 }
 
-function leerLocalStorage<T>(clave: string, valorInicial: T): T {
-    if (typeof window === "undefined") return valorInicial;
+function numero(valor: unknown) {
+    const convertido = Number(valor || 0);
 
-    try {
-        const datos = localStorage.getItem(clave);
+    if (Number.isNaN(convertido)) return 0;
 
-        if (!datos) return valorInicial;
-
-        return JSON.parse(datos) as T;
-    } catch {
-        return valorInicial;
-    }
+    return convertido;
 }
 
 function formatoMoneda(valor: number, simbolo = "C$") {
@@ -312,12 +115,12 @@ function nombreArchivoSeguro(nombre: string) {
 
 function columnaExcel(numeroColumna: number) {
     let resultado = "";
-    let numero = numeroColumna;
+    let numeroActual = numeroColumna;
 
-    while (numero > 0) {
-        const residuo = (numero - 1) % 26;
+    while (numeroActual > 0) {
+        const residuo = (numeroActual - 1) % 26;
         resultado = String.fromCharCode(65 + residuo) + resultado;
-        numero = Math.floor((numero - residuo) / 26);
+        numeroActual = Math.floor((numeroActual - residuo) / 26);
     }
 
     return resultado;
@@ -667,51 +470,59 @@ export default function ExportacionesPage() {
         CONFIGURACION_PREDETERMINADA
     );
 
-    const [pacientes, setPacientes] = useState<Paciente[]>([]);
-    const [ventas, setVentas] = useState<Venta[]>([]);
-    const [gastos, setGastos] = useState<Gasto[]>([]);
-    const [productos, setProductos] = useState<Producto[]>([]);
-    const [proveedores, setProveedores] = useState<Proveedor[]>([]);
-    const [citas, setCitas] = useState<Cita[]>([]);
-    const [cuentasCobrar, setCuentasCobrar] = useState<CuentaPorCobrar[]>([]);
-    const [cuentasPagar, setCuentasPagar] = useState<CuentaPorPagar[]>([]);
-    const [compras, setCompras] = useState<CompraProveedor[]>([]);
-    const [cierres, setCierres] = useState<CierreCaja[]>([]);
+    const [pacientes, setPacientes] = useState<PacienteExportacion[]>([]);
+    const [ventas, setVentas] = useState<VentaExportacion[]>([]);
+    const [gastos, setGastos] = useState<GastoExportacion[]>([]);
+    const [productos, setProductos] = useState<ProductoExportacion[]>([]);
+    const [proveedores, setProveedores] = useState<ProveedorExportacion[]>([]);
+    const [citas, setCitas] = useState<CitaExportacion[]>([]);
+    const [cuentasCobrar, setCuentasCobrar] = useState<CuentaPorCobrarExportacion[]>([]);
+    const [cuentasPagar, setCuentasPagar] = useState<CuentaPorPagarExportacion[]>([]);
+    const [compras, setCompras] = useState<CompraProveedorExportacion[]>([]);
+    const [cierres, setCierres] = useState<CierreCajaExportacion[]>([]);
+    const [erroresLectura, setErroresLectura] = useState<string[]>([]);
 
     const [mesSeleccionado, setMesSeleccionado] = useState(mesActualLocal());
     const [alcance, setAlcance] = useState<"Mes" | "Todo">("Mes");
     const [busqueda, setBusqueda] = useState("");
     const [exportando, setExportando] = useState("");
+    const [cargando, setCargando] = useState(true);
+    const [error, setError] = useState("");
 
-    function cargarDatos() {
-        setConfiguracion(obtenerConfiguracionClinica());
+    async function cargarDatos() {
+        setCargando(true);
+        setError("");
 
-        setPacientes(leerLocalStorage<Paciente[]>("pacientes_sistema_clinico", []));
-        setVentas(leerLocalStorage<Venta[]>("ventas_sistema_clinico", []));
-        setGastos(leerLocalStorage<Gasto[]>("gastos_sistema_clinico", []));
-        setProductos(leerLocalStorage<Producto[]>("productos_sistema_clinico", []));
-        setProveedores(
-            leerLocalStorage<Proveedor[]>("proveedores_sistema_clinico", [])
-        );
-        setCitas(leerLocalStorage<Cita[]>("citas_sistema_clinico", []));
-        setCuentasCobrar(
-            leerLocalStorage<CuentaPorCobrar[]>(
-                "cuentas_cobrar_sistema_clinico",
-                []
-            )
-        );
-        setCuentasPagar(
-            leerLocalStorage<CuentaPorPagar[]>("cuentas_pagar_sistema_clinico", [])
-        );
-        setCompras(
-            leerLocalStorage<CompraProveedor[]>(
-                "compras_proveedores_sistema_clinico",
-                []
-            )
-        );
-        setCierres(
-            leerLocalStorage<CierreCaja[]>("cierres_caja_sistema_clinico", [])
-        );
+        try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
+            const datos = await cargarDatosExportacionesSupabase();
+
+            setPacientes(datos.pacientes);
+            setVentas(datos.ventas);
+            setGastos(datos.gastos);
+            setProductos(datos.productos);
+            setProveedores(datos.proveedores);
+            setCitas(datos.citas);
+            setCuentasCobrar(datos.cuentasCobrar);
+            setCuentasPagar(datos.cuentasPagar);
+            setCompras(datos.compras);
+            setCierres(datos.cierres);
+            setErroresLectura(datos.errores);
+        } catch (errorActual) {
+            const mensaje =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudieron cargar las exportaciones desde Supabase.";
+
+            setError(mensaje);
+        } finally {
+            setCargando(false);
+        }
     }
 
     useEffect(() => {
@@ -742,37 +553,37 @@ export default function ExportacionesPage() {
     );
 
     const totalVentas = ventasExportar.reduce(
-        (total, venta) => total + (venta.total || 0),
+        (total, venta) => total + numero(venta.total),
         0
     );
 
     const efectivo = ventasExportar.reduce(
-        (total, venta) => total + (venta.efectivo || 0),
+        (total, venta) => total + numero(venta.efectivo),
         0
     );
 
     const tarjeta = ventasExportar.reduce(
-        (total, venta) => total + (venta.tarjeta || 0),
+        (total, venta) => total + numero(venta.tarjeta),
         0
     );
 
     const transferencia = ventasExportar.reduce(
-        (total, venta) => total + (venta.transferencia || 0),
+        (total, venta) => total + numero(venta.transferencia),
         0
     );
 
     const credito = ventasExportar.reduce(
-        (total, venta) => total + (venta.credito || 0),
+        (total, venta) => total + numero(venta.credito),
         0
     );
 
     const totalGastos = gastosExportar.reduce(
-        (total, gasto) => total + (gasto.monto || 0),
+        (total, gasto) => total + numero(gasto.monto),
         0
     );
 
     const totalCompras = comprasExportar.reduce(
-        (total, compra) => total + (compra.total || 0),
+        (total, compra) => total + numero(compra.total),
         0
     );
 
@@ -802,8 +613,9 @@ export default function ExportacionesPage() {
         )
         .reduce((total, cuenta) => total + cuenta.saldo, 0);
 
+    const comisionPOS = numero((configuracion as unknown as { comisionPOS?: number }).comisionPOS);
     const utilidadEstimada =
-        efectivo + tarjeta + transferencia - totalGastos - tarjeta * (configuracion.comisionPOS / 100);
+        efectivo + tarjeta + transferencia - totalGastos - tarjeta * (comisionPOS / 100);
 
     const datasets = useMemo<Record<string, DataSetExcel>>(
         () => ({
@@ -811,7 +623,7 @@ export default function ExportacionesPage() {
                 id: "pacientes",
                 titulo: "Pacientes",
                 hoja: "Pacientes",
-                descripcion: "Directorio de pacientes registrados en el sistema.",
+                descripcion: "Directorio de pacientes registrados en Supabase.",
                 columnas: [
                     { encabezado: "ID", key: "id", ancho: 18 },
                     { encabezado: "Nombre", key: "nombre", ancho: 28 },
@@ -823,6 +635,7 @@ export default function ExportacionesPage() {
                     { encabezado: "Enfermedades", key: "enfermedades", ancho: 28 },
                     { encabezado: "Medicamentos", key: "medicamentos", ancho: 28 },
                     { encabezado: "Saldo pendiente", key: "saldoPendiente", ancho: 18, tipo: "moneda", total: true },
+                    { encabezado: "Última cita", key: "ultimaCita", ancho: 18, tipo: "fecha" },
                     { encabezado: "Estado", key: "estado", ancho: 16, tipo: "estado" },
                     { encabezado: "Observaciones", key: "observaciones", ancho: 42 },
                 ],
@@ -837,6 +650,7 @@ export default function ExportacionesPage() {
                     enfermedades: paciente.enfermedades,
                     medicamentos: paciente.medicamentos,
                     saldoPendiente: paciente.saldoPendiente || 0,
+                    ultimaCita: paciente.ultimaCita,
                     estado: paciente.estado,
                     observaciones: paciente.observaciones,
                 })),
@@ -848,8 +662,8 @@ export default function ExportacionesPage() {
                 hoja: "Citas",
                 descripcion:
                     alcance === "Mes"
-                        ? "Citas del mes seleccionado."
-                        : "Histórico completo de citas.",
+                        ? "Citas del mes seleccionado desde Supabase."
+                        : "Histórico completo de citas desde Supabase.",
                 columnas: [
                     { encabezado: "ID", key: "id", ancho: 20 },
                     { encabezado: "Fecha", key: "fecha", ancho: 16, tipo: "fecha" },
@@ -882,8 +696,8 @@ export default function ExportacionesPage() {
                 hoja: "Ventas",
                 descripcion:
                     alcance === "Mes"
-                        ? "Ventas activas del mes seleccionado."
-                        : "Histórico completo de ventas activas.",
+                        ? "Ventas activas del mes seleccionado desde Supabase."
+                        : "Histórico completo de ventas activas desde Supabase.",
                 columnas: [
                     { encabezado: "ID", key: "id", ancho: 24 },
                     { encabezado: "Fecha", key: "fecha", ancho: 16, tipo: "fecha" },
@@ -924,8 +738,8 @@ export default function ExportacionesPage() {
                 hoja: "Gastos",
                 descripcion:
                     alcance === "Mes"
-                        ? "Gastos activos del mes seleccionado."
-                        : "Histórico completo de gastos activos.",
+                        ? "Gastos activos del mes seleccionado desde Supabase."
+                        : "Histórico completo de gastos activos desde Supabase.",
                 columnas: [
                     { encabezado: "ID", key: "id", ancho: 24 },
                     { encabezado: "Fecha", key: "fecha", ancho: 16, tipo: "fecha" },
@@ -997,7 +811,7 @@ export default function ExportacionesPage() {
                 id: "proveedores",
                 titulo: "Proveedores",
                 hoja: "Proveedores",
-                descripcion: "Directorio de proveedores registrados.",
+                descripcion: "Directorio de proveedores registrados en Supabase.",
                 columnas: [
                     { encabezado: "ID", key: "id", ancho: 22 },
                     { encabezado: "Nombre", key: "nombre", ancho: 30 },
@@ -1032,8 +846,8 @@ export default function ExportacionesPage() {
                 hoja: "Compras",
                 descripcion:
                     alcance === "Mes"
-                        ? "Compras activas del mes seleccionado."
-                        : "Histórico completo de compras activas.",
+                        ? "Compras activas del mes seleccionado desde Supabase."
+                        : "Histórico completo de compras activas desde Supabase.",
                 columnas: [
                     { encabezado: "ID", key: "id", ancho: 24 },
                     { encabezado: "Fecha", key: "fecha", ancho: 16, tipo: "fecha" },
@@ -1084,7 +898,6 @@ export default function ExportacionesPage() {
                     { encabezado: "Saldo pendiente", key: "saldo", ancho: 18, tipo: "moneda", total: true },
                     { encabezado: "Vencimiento", key: "fechaVencimiento", ancho: 16, tipo: "fecha" },
                     { encabezado: "Estado", key: "estado", ancho: 16, tipo: "estado" },
-                    { encabezado: "Abonos", key: "abonos", ancho: 14, tipo: "numero" },
                     { encabezado: "Venta relacionada", key: "ventaId", ancho: 24 },
                 ],
                 filas: cuentasCobrar.map((cuenta) => ({
@@ -1096,7 +909,6 @@ export default function ExportacionesPage() {
                     saldo: cuenta.saldo || 0,
                     fechaVencimiento: cuenta.fechaVencimiento,
                     estado: cuenta.estado,
-                    abonos: cuenta.abonos?.length || 0,
                     ventaId: cuenta.ventaId,
                 })),
             },
@@ -1115,7 +927,6 @@ export default function ExportacionesPage() {
                     { encabezado: "Saldo pendiente", key: "saldo", ancho: 18, tipo: "moneda", total: true },
                     { encabezado: "Vencimiento", key: "fechaVencimiento", ancho: 16, tipo: "fecha" },
                     { encabezado: "Estado", key: "estado", ancho: 16, tipo: "estado" },
-                    { encabezado: "Abonos", key: "abonos", ancho: 14, tipo: "numero" },
                     { encabezado: "Compra relacionada", key: "compraId", ancho: 24 },
                 ],
                 filas: cuentasPagar.map((cuenta) => ({
@@ -1127,7 +938,6 @@ export default function ExportacionesPage() {
                     saldo: cuenta.saldo || 0,
                     fechaVencimiento: cuenta.fechaVencimiento,
                     estado: cuenta.estado,
-                    abonos: cuenta.abonos?.length || 0,
                     compraId: cuenta.compraId,
                 })),
             },
@@ -1138,8 +948,8 @@ export default function ExportacionesPage() {
                 hoja: "Cierres Caja",
                 descripcion:
                     alcance === "Mes"
-                        ? "Cierres de caja del mes seleccionado."
-                        : "Histórico completo de cierres de caja.",
+                        ? "Cierres de caja del mes seleccionado desde Supabase."
+                        : "Histórico completo de cierres de caja desde Supabase.",
                 columnas: [
                     { encabezado: "ID", key: "id", ancho: 24 },
                     { encabezado: "Fecha", key: "fecha", ancho: 16, tipo: "fecha" },
@@ -1178,7 +988,6 @@ export default function ExportacionesPage() {
         }),
         [
             alcance,
-            mesSeleccionado,
             pacientes,
             ventasExportar,
             gastosExportar,
@@ -1209,7 +1018,7 @@ export default function ExportacionesPage() {
             seccion: "Pacientes",
             indicador: "Pacientes registrados",
             valor: pacientes.length,
-            comentario: "Total de pacientes en el sistema.",
+            comentario: "Total de pacientes en Supabase.",
         },
         {
             seccion: "Caja",
@@ -1265,6 +1074,12 @@ export default function ExportacionesPage() {
             indicador: "Por cobrar",
             valor: formatoMoneda(totalPorCobrar, configuracion.simboloMoneda),
             comentario: "Saldo pendiente de clientes/pacientes.",
+        },
+        {
+            seccion: "Proveedores",
+            indicador: "Compras activas",
+            valor: formatoMoneda(totalCompras, configuracion.simboloMoneda),
+            comentario: "Compras no anuladas dentro del alcance seleccionado.",
         },
         {
             seccion: "Proveedores",
@@ -1421,8 +1236,8 @@ export default function ExportacionesPage() {
                     : "exportacion-general-historica.xlsx";
 
             await guardarWorkbook(workbook, archivo);
-        } catch (error) {
-            console.error(error);
+        } catch (errorActual) {
+            console.error(errorActual);
             alert("No se pudo generar el archivo Excel.");
         } finally {
             setExportando("");
@@ -1455,8 +1270,8 @@ export default function ExportacionesPage() {
             const archivo = `${nombreArchivoSeguro(dataset.titulo)}-${periodo}.xlsx`;
 
             await guardarWorkbook(workbook, archivo);
-        } catch (error) {
-            console.error(error);
+        } catch (errorActual) {
+            console.error(errorActual);
             alert("No se pudo generar el archivo Excel.");
         } finally {
             setExportando("");
@@ -1466,9 +1281,72 @@ export default function ExportacionesPage() {
     return (
         <AppShell
             titulo="Exportaciones"
-            descripcion="Descarga información del sistema en Excel con formato claro, entendible y profesional"
+            descripcion="Descarga información real de Supabase en Excel con formato profesional"
             moduloActivo="Exportaciones"
         >
+            {error && (
+                <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-red-800">
+                                No se pudieron cargar las exportaciones
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-red-700">
+                                {error}
+                            </p>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            {erroresLectura.length > 0 && (
+                <section className="mb-4 rounded-2xl border border-amber-100 bg-amber-50 p-5">
+                    <div className="flex items-start gap-3">
+                        <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                        <div>
+                            <h3 className="text-sm font-black text-amber-800">
+                                Algunos módulos no devolvieron datos
+                            </h3>
+                            <p className="mt-1 text-xs leading-5 text-amber-700">
+                                La exportación sigue disponible con las tablas que sí respondieron.
+                            </p>
+
+                            <details className="mt-2">
+                                <summary className="cursor-pointer text-xs font-black text-amber-800">
+                                    Ver detalle técnico
+                                </summary>
+                                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-700">
+                                    {erroresLectura.slice(0, 8).map((item) => (
+                                        <li key={item}>{item}</li>
+                                    ))}
+                                </ul>
+                            </details>
+                        </div>
+                    </div>
+                </section>
+            )}
+
+            <section className="mb-4 flex flex-col gap-3 rounded-2xl border border-white bg-white/80 p-4 shadow-sm md:flex-row md:items-center md:justify-between">
+                <div>
+                    <p className="text-[11px] font-black uppercase tracking-[0.16em] text-teal-700">
+                        Exportaciones conectadas a Supabase
+                    </p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">
+                        Los Excel salen desde la base de datos real de la clínica, no desde localStorage.
+                    </p>
+                </div>
+
+                <button
+                    onClick={cargarDatos}
+                    disabled={cargando || !!exportando}
+                    className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-4 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
+                    {cargando ? "Cargando..." : "Recargar datos"}
+                </button>
+            </section>
+
             <section className="grid gap-4 lg:grid-cols-4">
                 <div className="glass-card rounded-2xl p-5">
                     <div className="flex items-start justify-between">
@@ -1624,9 +1502,10 @@ export default function ExportacionesPage() {
                         </label>
                         <button
                             onClick={cargarDatos}
-                            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-[13px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                            disabled={cargando || !!exportando}
+                            className="flex w-full items-center justify-center gap-2 rounded-2xl bg-white px-4 py-3 text-[13px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            <RefreshCcw className="h-4 w-4" />
+                            <RefreshCcw className={`h-4 w-4 ${cargando ? "animate-spin" : ""}`} />
                             Recargar datos
                         </button>
                     </div>
@@ -1653,7 +1532,7 @@ export default function ExportacionesPage() {
 
                     <button
                         onClick={exportarTodo}
-                        disabled={!!exportando}
+                        disabled={!!exportando || cargando}
                         className="flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-teal-500 to-cyan-500 px-6 py-4 text-sm font-black text-white shadow-lg shadow-teal-500/20 hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
                     >
                         <Download className="h-5 w-5" />
@@ -1689,7 +1568,7 @@ export default function ExportacionesPage() {
 
                             <button
                                 onClick={() => exportarModulo(dataset)}
-                                disabled={!!exportando}
+                                disabled={!!exportando || cargando}
                                 className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
                             >
                                 <Download className="h-4 w-4" />
@@ -1722,7 +1601,7 @@ export default function ExportacionesPage() {
                         <p className="mt-1 text-xs leading-5 text-amber-700">
                             Si acabás de registrar ventas, gastos, compras o cierres, presioná
                             primero <strong>Recargar datos</strong>. Así el Excel sale con la
-                            información más reciente guardada en este navegador.
+                            información más reciente guardada en Supabase.
                         </p>
                     </div>
                 </div>
