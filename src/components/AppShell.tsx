@@ -239,6 +239,47 @@ function fechaActual() {
     });
 }
 
+const USUARIO_SESION_KEY = "usuario_sistema_clinico";
+const MENU_COLAPSADO_KEY = MENU_COLAPSADO_KEY;
+const NOTIFICACIONES_REVISADAS_KEY = NOTIFICACIONES_REVISADAS_KEY;
+
+function esRolUsuario(valor: unknown): valor is RolUsuario {
+    return (
+        valor === "SUPER_ADMIN" ||
+        valor === "ADMIN" ||
+        valor === "DOCTOR" ||
+        valor === "RECEPCION" ||
+        valor === "CAJA"
+    );
+}
+
+function obtenerUsuarioSesionRapida(): UsuarioSistema | null {
+    if (typeof window === "undefined") return null;
+
+    try {
+        const usuarioGuardado = localStorage.getItem(USUARIO_SESION_KEY);
+        if (!usuarioGuardado) return null;
+
+        const usuarioActual = JSON.parse(usuarioGuardado) as Partial<UsuarioSistema>;
+
+        if (
+            !usuarioActual.usuario ||
+            !usuarioActual.nombre ||
+            !esRolUsuario(usuarioActual.rol)
+        ) {
+            return null;
+        }
+
+        return {
+            usuario: usuarioActual.usuario,
+            nombre: usuarioActual.nombre,
+            rol: usuarioActual.rol,
+        };
+    } catch {
+        return null;
+    }
+}
+
 function obtenerAvisoLicencia(licencia: LicenciaClinica | null) {
     if (!licencia) return null;
 
@@ -276,13 +317,25 @@ export default function AppShell({
     const router = useRouter();
     const pathname = usePathname();
 
-    const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
-    const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(
-        CONFIGURACION_PREDETERMINADA
+    const [usuario, setUsuario] = useState<UsuarioSistema | null>(() =>
+        obtenerUsuarioSesionRapida()
     );
-    const [cargando, setCargando] = useState(true);
+    const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(() => {
+        if (typeof window === "undefined") return CONFIGURACION_PREDETERMINADA;
+
+        return obtenerConfiguracionClinica();
+    });
+    const [cargando, setCargando] = useState(() => {
+        if (typeof window === "undefined") return true;
+
+        return !obtenerUsuarioSesionRapida();
+    });
     const [menuMovil, setMenuMovil] = useState(false);
-    const [menuColapsado, setMenuColapsado] = useState(false);
+    const [menuColapsado, setMenuColapsado] = useState(() => {
+        if (typeof window === "undefined") return false;
+
+        return localStorage.getItem(MENU_COLAPSADO_KEY) === "true";
+    });
     const [notificacionesPendientes, setNotificacionesPendientes] = useState(0);
     const [busquedaGlobal, setBusquedaGlobal] = useState("");
     const [licenciaClinica, setLicenciaClinica] =
@@ -292,43 +345,30 @@ export default function AppShell({
         let componenteActivo = true;
 
         async function cargarSistema() {
-            const usuarioGuardado = localStorage.getItem("usuario_sistema_clinico");
+            const usuarioActual = obtenerUsuarioSesionRapida();
 
-            const menuGuardado = localStorage.getItem(
-                "menu_colapsado_sistema_clinico"
-            );
-
-            setMenuColapsado(menuGuardado === "true");
-
-            if (!usuarioGuardado) {
+            if (!usuarioActual) {
+                localStorage.removeItem(USUARIO_SESION_KEY);
+                setUsuario(null);
                 setCargando(false);
                 router.replace("/login");
                 return;
             }
 
+            if (usuarioActual.rol === "SUPER_ADMIN") {
+                setUsuario(usuarioActual);
+                setCargando(false);
+                router.replace("/super-admin");
+                return;
+            }
+
+            // Pintamos el sistema de inmediato usando la sesión local ya validada.
+            // Luego se confirma licencia/configuración con Supabase en segundo plano.
+            setUsuario(usuarioActual);
+            setMenuColapsado(localStorage.getItem(MENU_COLAPSADO_KEY) === "true");
+            setCargando(false);
+
             try {
-                const usuarioActual = JSON.parse(usuarioGuardado) as UsuarioSistema;
-
-                const rolValido =
-                    usuarioActual.rol === "SUPER_ADMIN" ||
-                    usuarioActual.rol === "ADMIN" ||
-                    usuarioActual.rol === "DOCTOR" ||
-                    usuarioActual.rol === "RECEPCION" ||
-                    usuarioActual.rol === "CAJA";
-
-                if (!usuarioActual.usuario || !usuarioActual.nombre || !rolValido) {
-                    localStorage.removeItem("usuario_sistema_clinico");
-                    setCargando(false);
-                    router.replace("/login");
-                    return;
-                }
-
-                if (usuarioActual.rol === "SUPER_ADMIN") {
-                    setCargando(false);
-                    router.replace("/super-admin");
-                    return;
-                }
-
                 const licencia = await verificarLicenciaClinica();
 
                 if (!componenteActivo) return;
@@ -337,7 +377,7 @@ export default function AppShell({
                     licencia.estadoAcceso === "SinPerfil" ||
                     licencia.estadoAcceso === "Error"
                 ) {
-                    localStorage.removeItem("usuario_sistema_clinico");
+                    localStorage.removeItem(USUARIO_SESION_KEY);
                     setCargando(false);
                     router.replace("/login");
                     return;
@@ -379,7 +419,7 @@ export default function AppShell({
                         rol: usuarioActual.rol as RolUsuarioClinica,
                     });
                     const revisadasRaw = localStorage.getItem(
-                        "notificaciones_revisadas_sistema_clinico"
+                        NOTIFICACIONES_REVISADAS_KEY
                     );
 
                     let revisadas: string[] = [];
@@ -399,7 +439,7 @@ export default function AppShell({
 
                 setCargando(false);
             } catch {
-                localStorage.removeItem("usuario_sistema_clinico");
+                localStorage.removeItem(USUARIO_SESION_KEY);
                 setCargando(false);
                 router.replace("/login");
             }
@@ -458,7 +498,7 @@ export default function AppShell({
             // Si Supabase no responde, limpiamos la sesión local igual.
         }
 
-        localStorage.removeItem("usuario_sistema_clinico");
+        localStorage.removeItem(USUARIO_SESION_KEY);
         router.replace("/login");
     }
 
@@ -466,7 +506,7 @@ export default function AppShell({
         setMenuColapsado((valorActual) => {
             const nuevoValor = !valorActual;
             localStorage.setItem(
-                "menu_colapsado_sistema_clinico",
+                MENU_COLAPSADO_KEY,
                 String(nuevoValor)
             );
             return nuevoValor;
