@@ -240,8 +240,8 @@ function fechaActual() {
 }
 
 const USUARIO_SESION_KEY = "usuario_sistema_clinico";
-const MENU_COLAPSADO_KEY = MENU_COLAPSADO_KEY;
-const NOTIFICACIONES_REVISADAS_KEY = NOTIFICACIONES_REVISADAS_KEY;
+const MENU_COLAPSADO_KEY = "menu_colapsado_sistema_clinico";
+const NOTIFICACIONES_REVISADAS_KEY = "notificaciones_revisadas_sistema_clinico";
 
 function esRolUsuario(valor: unknown): valor is RolUsuario {
     return (
