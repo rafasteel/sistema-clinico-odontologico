@@ -40,7 +40,12 @@ function sumarMeses(fechaBase: string, meses: number) {
         return fallback.toISOString().slice(0, 10);
     }
 
+    const diaOriginal = fecha.getDate();
     fecha.setMonth(fecha.getMonth() + meses);
+
+    if (fecha.getDate() < diaOriginal) {
+        fecha.setDate(0);
+    }
 
     return fecha.toISOString().slice(0, 10);
 }
@@ -131,8 +136,14 @@ export async function POST(request: NextRequest) {
         }
 
         const fechaPago = hoyISO();
-        const fechaBase = mayorFecha(suscripcion.fecha_vencimiento || fechaPago, fechaPago);
+        const vencimientoActual =
+            suscripcion.fecha_vencimiento ||
+            clinica.fecha_vencimiento ||
+            fechaPago;
+        const fechaBase = mayorFecha(vencimientoActual, fechaPago);
         const nuevaFechaVencimiento = sumarMeses(fechaBase, meses);
+        const notasPago =
+            notas || `Pago registrado desde SUPER_ADMIN. Extiende ${meses} mes(es).`;
 
         const { data: pago, error: errorPago } = await supabaseAdmin
             .from("pagos_suscripcion")
@@ -146,9 +157,7 @@ export async function POST(request: NextRequest) {
                 referencia,
                 estado: "Pagado",
                 registrado_por: perfilSolicitante.id,
-                notas:
-                    notas ||
-                    `Pago registrado desde SUPER_ADMIN. Extiende ${meses} mes(es).`,
+                notas: notasPago,
             })
             .select("*")
             .single();
@@ -164,9 +173,7 @@ export async function POST(request: NextRequest) {
                     estado: "Activa",
                     fecha_vencimiento: nuevaFechaVencimiento,
                     ultimo_pago: fechaPago,
-                    notas:
-                        notas ||
-                        `Último pago registrado el ${fechaPago}. Próximo vencimiento ${nuevaFechaVencimiento}.`,
+                    notas: `Último pago registrado el ${fechaPago}. Próximo vencimiento ${nuevaFechaVencimiento}.`,
                 })
                 .eq("id", suscripcion.id)
                 .select("*")
@@ -205,7 +212,7 @@ export async function POST(request: NextRequest) {
             usuario_id: perfilSolicitante.id,
             modulo: "SUPER_ADMIN",
             accion: "Pago de suscripción registrado",
-            detalle: `Pago de ${moneda} ${monto.toFixed(2)} registrado para ${clinica.nombre}. Nueva fecha de vencimiento: ${nuevaFechaVencimiento}.`,
+            detalle: `Pago de ${moneda} ${monto.toFixed(2)} registrado para ${clinica.nombre}. Vencimiento anterior: ${vencimientoActual}. Nueva fecha de vencimiento: ${nuevaFechaVencimiento}.`,
             registro_id: pago.id,
             datos_anteriores: {
                 clinica,
@@ -221,10 +228,12 @@ export async function POST(request: NextRequest) {
 
         return NextResponse.json({
             ok: true,
-            mensaje: `Pago registrado. Nueva fecha de vencimiento: ${nuevaFechaVencimiento}.`,
+            mensaje: `Pago registrado correctamente. Nueva fecha de vencimiento: ${nuevaFechaVencimiento}.`,
             pago,
             clinica: clinicaActualizada,
             suscripcion: suscripcionActualizada,
+            vencimientoAnterior: vencimientoActual,
+            nuevaFechaVencimiento,
         });
     } catch (error) {
         const mensaje =

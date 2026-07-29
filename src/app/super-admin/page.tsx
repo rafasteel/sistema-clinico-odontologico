@@ -9,12 +9,14 @@ import {
     CalendarClock,
     CheckCircle2,
     CreditCard,
+    Edit3,
     LogOut,
     PauseCircle,
     Plus,
     RefreshCcw,
     ShieldCheck,
     Stethoscope,
+    Trash2,
     Unlock,
     Users,
     WalletCards,
@@ -106,6 +108,8 @@ type FormularioPago = {
     notas: string;
 };
 
+type ModalClinicaModo = "crear" | "editar";
+
 const formularioClinicaInicial: FormularioClinica = {
     nombreClinica: "",
     telefono: "",
@@ -184,6 +188,9 @@ export default function SuperAdminPage() {
     const [mensaje, setMensaje] = useState("");
 
     const [modalClinicaAbierto, setModalClinicaAbierto] = useState(false);
+    const [modoModalClinica, setModoModalClinica] =
+        useState<ModalClinicaModo>("crear");
+    const [clinicaEditandoId, setClinicaEditandoId] = useState<string | null>(null);
     const [guardandoClinica, setGuardandoClinica] = useState(false);
     const [formularioClinica, setFormularioClinica] =
         useState<FormularioClinica>({
@@ -299,11 +306,51 @@ export default function SuperAdminPage() {
     function abrirModalClinica() {
         setMensaje("");
         setError("");
+        setModoModalClinica("crear");
+        setClinicaEditandoId(null);
         setFormularioClinica({
             ...formularioClinicaInicial,
             fechaVencimiento: fechaEn30Dias(),
         });
         setModalClinicaAbierto(true);
+    }
+
+    function abrirModalEditarClinica(clinica: Clinica) {
+        const suscripcion = mapaSuscripciones.get(clinica.id);
+
+        setMensaje("");
+        setError("");
+        setModoModalClinica("editar");
+        setClinicaEditandoId(clinica.id);
+        setFormularioClinica({
+            ...formularioClinicaInicial,
+            nombreClinica: clinica.nombre || "",
+            telefono: clinica.telefono || "",
+            whatsapp: clinica.whatsapp || "",
+            correoClinica: clinica.correo || "",
+            direccion: clinica.direccion || "",
+            ruc: "",
+            plan: clinica.plan || suscripcion?.plan || "Profesional",
+            precioMensual: String(suscripcion?.precio_mensual || 100),
+            monedaSuscripcion: suscripcion?.moneda || "USD",
+            fechaVencimiento:
+                clinica.fecha_vencimiento ||
+                suscripcion?.fecha_vencimiento ||
+                fechaEn30Dias(),
+            diasGracia: "7",
+            adminNombre: "",
+            adminUsuario: "",
+            adminCorreo: "",
+            adminPassword: "",
+        });
+        setModalClinicaAbierto(true);
+    }
+
+    function cerrarModalClinica() {
+        setModalClinicaAbierto(false);
+        setModoModalClinica("crear");
+        setClinicaEditandoId(null);
+        setGuardandoClinica(false);
     }
 
     function abrirModalPago(clinica: Clinica) {
@@ -384,6 +431,64 @@ export default function SuperAdminPage() {
         }
     }
 
+    async function guardarEdicionClinica(event: FormEvent<HTMLFormElement>) {
+        event.preventDefault();
+
+        if (!clinicaEditandoId) {
+            setError("No se encontró la clínica que se está editando.");
+            return;
+        }
+
+        setError("");
+        setMensaje("");
+        setGuardandoClinica(true);
+
+        try {
+            const token = await obtenerTokenSesion();
+
+            const respuesta = await fetch("/api/super-admin/editar-clinica", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                    clinicaId: clinicaEditandoId,
+                    nombreClinica: formularioClinica.nombreClinica,
+                    telefono: formularioClinica.telefono,
+                    whatsapp: formularioClinica.whatsapp,
+                    correoClinica: formularioClinica.correoClinica,
+                    direccion: formularioClinica.direccion,
+                    ruc: formularioClinica.ruc,
+                    plan: formularioClinica.plan,
+                    precioMensual: Number(formularioClinica.precioMensual || 0),
+                    monedaSuscripcion: formularioClinica.monedaSuscripcion,
+                    fechaVencimiento: formularioClinica.fechaVencimiento,
+                    diasGracia: Number(formularioClinica.diasGracia || 7),
+                }),
+            });
+
+            const datos = await respuesta.json();
+
+            if (!respuesta.ok || !datos.ok) {
+                throw new Error(datos.mensaje || "No se pudo actualizar la clínica.");
+            }
+
+            setMensaje(datos.mensaje || "Clínica actualizada correctamente.");
+            cerrarModalClinica();
+            await cargarDatos();
+        } catch (errorActual) {
+            const mensajeError =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo actualizar la clínica.";
+
+            setError(mensajeError);
+        } finally {
+            setGuardandoClinica(false);
+        }
+    }
+
     async function cambiarEstadoClinica(
         clinica: Clinica,
         estado: EstadoClinica
@@ -433,6 +538,56 @@ export default function SuperAdminPage() {
                 errorActual instanceof Error
                     ? errorActual.message
                     : "No se pudo cambiar el estado.";
+
+            setError(mensajeError);
+        }
+    }
+
+    async function eliminarClinica(clinica: Clinica) {
+        if (clinica.estado === "Cancelada") {
+            alert("Esta clínica ya está cancelada.");
+            return;
+        }
+
+        const confirmacion = window.prompt(
+            `Esta acción cancelará la clínica ${clinica.nombre}, desactivará sus usuarios y bloqueará su acceso.
+
+Para confirmar escribí: ELIMINAR`
+        );
+
+        if (confirmacion !== "ELIMINAR") return;
+
+        setError("");
+        setMensaje("");
+
+        try {
+            const token = await obtenerTokenSesion();
+
+            const respuesta = await fetch("/api/super-admin/eliminar-clinica", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${token}`,
+                },
+                body: JSON.stringify({
+                    clinicaId: clinica.id,
+                    motivo: "Clínica eliminada/cancelada desde panel SUPER_ADMIN.",
+                }),
+            });
+
+            const datos = await respuesta.json();
+
+            if (!respuesta.ok || !datos.ok) {
+                throw new Error(datos.mensaje || "No se pudo eliminar la clínica.");
+            }
+
+            setMensaje(datos.mensaje || "Clínica eliminada correctamente.");
+            await cargarDatos();
+        } catch (errorActual) {
+            const mensajeError =
+                errorActual instanceof Error
+                    ? errorActual.message
+                    : "No se pudo eliminar la clínica.";
 
             setError(mensajeError);
         }
@@ -736,6 +891,14 @@ export default function SuperAdminPage() {
                                                 <td className="px-5 py-4">
                                                     <div className="flex flex-wrap gap-2">
                                                         <button
+                                                            onClick={() => abrirModalEditarClinica(clinica)}
+                                                            className="flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-black text-blue-700 hover:bg-blue-100"
+                                                        >
+                                                            <Edit3 className="h-3.5 w-3.5" />
+                                                            Editar
+                                                        </button>
+
+                                                        <button
                                                             onClick={() => abrirModalPago(clinica)}
                                                             className="flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3 py-2 text-[11px] font-black text-emerald-700 hover:bg-emerald-100"
                                                         >
@@ -767,6 +930,15 @@ export default function SuperAdminPage() {
                                                                 Suspender
                                                             </button>
                                                         )}
+
+                                                        <button
+                                                            onClick={() => eliminarClinica(clinica)}
+                                                            disabled={clinica.estado === "Cancelada"}
+                                                            className="flex items-center gap-1.5 rounded-xl bg-slate-100 px-3 py-2 text-[11px] font-black text-slate-700 hover:bg-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        >
+                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                            Eliminar
+                                                        </button>
                                                     </div>
                                                 </td>
                                             </tr>
@@ -871,8 +1043,8 @@ export default function SuperAdminPage() {
                                 Siguiente mejora
                             </h3>
                             <p className="mt-1 text-xs leading-5 text-amber-700">
-                                Después conectamos la verificación de suscripción al AppShell
-                                para que las clínicas suspendidas no puedan usar el sistema.
+                                Las clínicas suspendidas o canceladas quedan bloqueadas por licencia.
+                                Usá eliminar solo cuando querás cancelar una clínica y conservar su historial.
                             </p>
                         </div>
                     </div>
@@ -885,22 +1057,26 @@ export default function SuperAdminPage() {
                         <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-100 bg-white px-6 py-5">
                             <div>
                                 <h2 className="text-xl font-black text-slate-900">
-                                    Crear nueva clínica
+                                    {modoModalClinica === "crear"
+                                        ? "Crear nueva clínica"
+                                        : "Editar clínica"}
                                 </h2>
                                 <p className="mt-1 text-sm text-slate-500">
-                                    Se creará la clínica, su suscripción y el usuario ADMIN.
+                                    {modoModalClinica === "crear"
+                                        ? "Se creará la clínica, su suscripción y el usuario ADMIN."
+                                        : "Actualizá los datos generales y la suscripción de la clínica."}
                                 </p>
                             </div>
 
                             <button
-                                onClick={() => setModalClinicaAbierto(false)}
+                                onClick={cerrarModalClinica}
                                 className="rounded-2xl bg-slate-100 p-2 text-slate-500 hover:bg-slate-200"
                             >
                                 <X className="h-5 w-5" />
                             </button>
                         </div>
 
-                        <form onSubmit={crearClinica} className="p-6">
+                        <form onSubmit={modoModalClinica === "crear" ? crearClinica : guardarEdicionClinica} className="p-6">
                             <div className="grid gap-5 lg:grid-cols-2">
                                 <div className="rounded-3xl bg-slate-50 p-5">
                                     <h3 className="text-sm font-black text-slate-900">
@@ -1093,91 +1269,93 @@ export default function SuperAdminPage() {
                                         </div>
                                     </div>
 
-                                    <div className="rounded-3xl bg-slate-900 p-5 text-white">
-                                        <h3 className="text-sm font-black">
-                                            Usuario ADMIN de la clínica
-                                        </h3>
+                                    {modoModalClinica === "crear" && (
+                                        <div className="rounded-3xl bg-slate-900 p-5 text-white">
+                                            <h3 className="text-sm font-black">
+                                                Usuario ADMIN de la clínica
+                                            </h3>
 
-                                        <div className="mt-4 grid gap-4">
-                                            <div>
-                                                <label className="mb-2 block text-xs font-bold text-white/70">
-                                                    Nombre administrador *
-                                                </label>
-                                                <input
-                                                    value={formularioClinica.adminNombre}
-                                                    onChange={(event) =>
-                                                        actualizarFormularioClinica("adminNombre", event.target.value)
-                                                    }
-                                                    required
-                                                    className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
-                                                />
-                                            </div>
-
-                                            <div className="grid gap-4 md:grid-cols-2">
+                                            <div className="mt-4 grid gap-4">
                                                 <div>
                                                     <label className="mb-2 block text-xs font-bold text-white/70">
-                                                        Usuario
+                                                        Nombre administrador *
                                                     </label>
                                                     <input
-                                                        value={formularioClinica.adminUsuario}
+                                                        value={formularioClinica.adminNombre}
                                                         onChange={(event) =>
-                                                            actualizarFormularioClinica(
-                                                                "adminUsuario",
-                                                                event.target.value
-                                                            )
+                                                            actualizarFormularioClinica("adminNombre", event.target.value)
                                                         }
-                                                        placeholder="admin_clinica"
-                                                        className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
-                                                    />
-                                                </div>
-
-                                                <div>
-                                                    <label className="mb-2 block text-xs font-bold text-white/70">
-                                                        Correo *
-                                                    </label>
-                                                    <input
-                                                        value={formularioClinica.adminCorreo}
-                                                        onChange={(event) =>
-                                                            actualizarFormularioClinica(
-                                                                "adminCorreo",
-                                                                event.target.value
-                                                            )
-                                                        }
-                                                        type="email"
                                                         required
                                                         className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
                                                     />
                                                 </div>
-                                            </div>
 
-                                            <div>
-                                                <label className="mb-2 block text-xs font-bold text-white/70">
-                                                    Contraseña temporal *
-                                                </label>
-                                                <input
-                                                    value={formularioClinica.adminPassword}
-                                                    onChange={(event) =>
-                                                        actualizarFormularioClinica(
-                                                            "adminPassword",
-                                                            event.target.value
-                                                        )
-                                                    }
-                                                    type="password"
-                                                    required
-                                                    minLength={8}
-                                                    placeholder="Mínimo 8 caracteres"
-                                                    className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
-                                                />
+                                                <div className="grid gap-4 md:grid-cols-2">
+                                                    <div>
+                                                        <label className="mb-2 block text-xs font-bold text-white/70">
+                                                            Usuario
+                                                        </label>
+                                                        <input
+                                                            value={formularioClinica.adminUsuario}
+                                                            onChange={(event) =>
+                                                                actualizarFormularioClinica(
+                                                                    "adminUsuario",
+                                                                    event.target.value
+                                                                )
+                                                            }
+                                                            placeholder="admin_clinica"
+                                                            className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                        />
+                                                    </div>
+
+                                                    <div>
+                                                        <label className="mb-2 block text-xs font-bold text-white/70">
+                                                            Correo *
+                                                        </label>
+                                                        <input
+                                                            value={formularioClinica.adminCorreo}
+                                                            onChange={(event) =>
+                                                                actualizarFormularioClinica(
+                                                                    "adminCorreo",
+                                                                    event.target.value
+                                                                )
+                                                            }
+                                                            type="email"
+                                                            required
+                                                            className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div>
+                                                    <label className="mb-2 block text-xs font-bold text-white/70">
+                                                        Contraseña temporal *
+                                                    </label>
+                                                    <input
+                                                        value={formularioClinica.adminPassword}
+                                                        onChange={(event) =>
+                                                            actualizarFormularioClinica(
+                                                                "adminPassword",
+                                                                event.target.value
+                                                            )
+                                                        }
+                                                        type="password"
+                                                        required
+                                                        minLength={8}
+                                                        placeholder="Mínimo 8 caracteres"
+                                                        className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm text-slate-900 outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                    />
+                                                </div>
                                             </div>
                                         </div>
-                                    </div>
+                                    )}
                                 </div>
                             </div>
 
                             <div className="mt-6 flex flex-wrap justify-end gap-3">
                                 <button
                                     type="button"
-                                    onClick={() => setModalClinicaAbierto(false)}
+                                    onClick={cerrarModalClinica}
                                     className="rounded-2xl bg-slate-100 px-5 py-3 text-sm font-black text-slate-600 hover:bg-slate-200"
                                 >
                                     Cancelar
@@ -1188,7 +1366,13 @@ export default function SuperAdminPage() {
                                     className="flex items-center gap-2 rounded-2xl bg-gradient-to-br from-teal-600 to-cyan-600 px-6 py-3 text-sm font-black text-white shadow-lg shadow-teal-500/20 hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <CheckCircle2 className="h-4 w-4" />
-                                    {guardandoClinica ? "Creando clínica..." : "Crear clínica"}
+                                    {guardandoClinica
+                                        ? modoModalClinica === "crear"
+                                            ? "Creando clínica..."
+                                            : "Guardando cambios..."
+                                        : modoModalClinica === "crear"
+                                            ? "Crear clínica"
+                                            : "Guardar cambios"}
                                 </button>
                             </div>
                         </form>
