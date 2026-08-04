@@ -50,28 +50,43 @@ type Paciente = {
     estado: "Activo" | "Inactivo";
 };
 
-type FormularioPresupuesto = {
+type FormularioItemPresupuesto = {
+    idLocal: string;
     nombre: string;
     descripcion: string;
     cantidad: string;
     precioUnitario: string;
-    descuento: string;
-    observaciones: string;
     piezaCodigo: string;
     cara: CaraDentalSupabase | "";
     estadoDental: EstadoDentalSupabase | "";
 };
 
+type FormularioPresupuesto = {
+    descuento: string;
+    observaciones: string;
+    items: FormularioItemPresupuesto[];
+};
+
+function crearItemVacio(): FormularioItemPresupuesto {
+    return {
+        idLocal:
+            typeof crypto !== "undefined" && "randomUUID" in crypto
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random()}`,
+        nombre: "",
+        descripcion: "",
+        cantidad: "1",
+        precioUnitario: "",
+        piezaCodigo: "",
+        cara: "",
+        estadoDental: "",
+    };
+}
+
 const formularioVacio: FormularioPresupuesto = {
-    nombre: "",
-    descripcion: "",
-    cantidad: "1",
-    precioUnitario: "",
     descuento: "0",
     observaciones: "",
-    piezaCodigo: "",
-    cara: "",
-    estadoDental: "",
+    items: [crearItemVacio()],
 };
 
 const carasDentales: { valor: CaraDentalSupabase; etiqueta: string }[] = [
@@ -145,7 +160,10 @@ export default function PresupuestosPacientePage() {
     const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(CONFIGURACION_PREDETERMINADA);
     const [paciente, setPaciente] = useState<Paciente | null>(null);
     const [presupuestos, setPresupuestos] = useState<PresupuestoSupabase[]>([]);
-    const [formulario, setFormulario] = useState<FormularioPresupuesto>(formularioVacio);
+    const [formulario, setFormulario] = useState<FormularioPresupuesto>(() => ({
+        ...formularioVacio,
+        items: [crearItemVacio()],
+    }));
     const [mostrarFormulario, setMostrarFormulario] = useState(false);
     const [filtroEstado, setFiltroEstado] = useState<EstadoPresupuestoSupabase | "Todos">("Todos");
     const [busquedaPresupuesto, setBusquedaPresupuesto] = useState("");
@@ -183,29 +201,110 @@ export default function PresupuestosPacientePage() {
         cargarDatos();
     }, [pacienteId]);
 
-    function actualizarCampo<K extends keyof FormularioPresupuesto>(campo: K, valor: FormularioPresupuesto[K]) {
+    function actualizarCampo<K extends keyof FormularioPresupuesto>(
+        campo: K,
+        valor: FormularioPresupuesto[K]
+    ) {
         setFormulario((datosActuales) => ({ ...datosActuales, [campo]: valor }));
     }
+
+    function actualizarItem<K extends keyof FormularioItemPresupuesto>(
+        idLocal: string,
+        campo: K,
+        valor: FormularioItemPresupuesto[K]
+    ) {
+        setFormulario((datosActuales) => ({
+            ...datosActuales,
+            items: datosActuales.items.map((item) =>
+                item.idLocal === idLocal ? { ...item, [campo]: valor } : item
+            ),
+        }));
+    }
+
+    function agregarItem() {
+        setFormulario((datosActuales) => ({
+            ...datosActuales,
+            items: [...datosActuales.items, crearItemVacio()],
+        }));
+    }
+
+    function eliminarItem(idLocal: string) {
+        setFormulario((datosActuales) => {
+            if (datosActuales.items.length === 1) {
+                return {
+                    ...datosActuales,
+                    items: [crearItemVacio()],
+                };
+            }
+
+            return {
+                ...datosActuales,
+                items: datosActuales.items.filter((item) => item.idLocal !== idLocal),
+            };
+        });
+    }
+
+    function limpiarFormulario() {
+        setFormulario({
+            descuento: "0",
+            observaciones: "",
+            items: [crearItemVacio()],
+        });
+    }
+
+    function abrirFormularioNuevo() {
+        limpiarFormulario();
+        setMostrarFormulario(true);
+    }
+
+    const subtotalFormulario = useMemo(() => {
+        return formulario.items.reduce((total, item) => {
+            return total + numero(item.cantidad) * numero(item.precioUnitario);
+        }, 0);
+    }, [formulario.items]);
+
+    const descuentoFormulario = Math.max(0, numero(formulario.descuento));
+    const totalFormulario = Math.max(0, subtotalFormulario - descuentoFormulario);
 
     async function crearPresupuestoManual(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
         if (!paciente) return;
 
-        if (!formulario.nombre.trim()) {
-            alert("Indicá el nombre del tratamiento o procedimiento.");
+        const itemsValidos = formulario.items
+            .map((item) => ({
+                ...item,
+                nombre: item.nombre.trim(),
+                descripcion: item.descripcion.trim(),
+                piezaCodigo: item.piezaCodigo.trim(),
+                cantidadNumero: numero(item.cantidad),
+                precioUnitarioNumero: numero(item.precioUnitario),
+            }))
+            .filter((item) => item.nombre || item.descripcion || item.precioUnitarioNumero > 0);
+
+        if (itemsValidos.length === 0) {
+            alert("Agregá al menos un concepto al presupuesto.");
             return;
         }
 
-        const cantidad = numero(formulario.cantidad);
-        const precioUnitario = numero(formulario.precioUnitario);
-        const descuento = numero(formulario.descuento);
+        const itemSinNombre = itemsValidos.find((item) => !item.nombre);
 
-        if (cantidad <= 0) {
-            alert("La cantidad debe ser mayor que cero.");
+        if (itemSinNombre) {
+            alert("Cada concepto debe tener nombre de tratamiento o procedimiento.");
             return;
         }
 
-        if (precioUnitario < 0 || descuento < 0) {
+        const itemCantidadInvalida = itemsValidos.find((item) => item.cantidadNumero <= 0);
+
+        if (itemCantidadInvalida) {
+            alert("La cantidad de cada concepto debe ser mayor que cero.");
+            return;
+        }
+
+        const itemMontoInvalido = itemsValidos.find(
+            (item) => item.precioUnitarioNumero < 0
+        );
+
+        if (itemMontoInvalido || descuentoFormulario < 0) {
             alert("Los montos no pueden ser negativos.");
             return;
         }
@@ -216,32 +315,30 @@ export default function PresupuestosPacientePage() {
         try {
             await crearPresupuestoSupabase({
                 paciente_id: paciente.id,
-                descuento,
+                descuento: descuentoFormulario,
                 observaciones: formulario.observaciones.trim(),
                 origen: "Manual",
-                pieza_codigo: formulario.piezaCodigo.trim() || "",
-                cara: formulario.cara,
-                estado_dental: formulario.estadoDental,
-                items: [
-                    {
-                        pieza_codigo: formulario.piezaCodigo.trim() || "",
-                        pieza_numero: formulario.piezaCodigo.trim() || "",
-                        cara: formulario.cara,
-                        estado_dental: formulario.estadoDental,
-                        nombre: formulario.nombre.trim(),
-                        tratamiento: formulario.nombre.trim(),
-                        descripcion: formulario.descripcion.trim() || "Sin descripción",
-                        cantidad,
-                        precio_unitario: precioUnitario,
-                        estado: "Pendiente",
-                    },
-                ],
+                pieza_codigo: itemsValidos[0]?.piezaCodigo || "",
+                cara: itemsValidos[0]?.cara || "",
+                estado_dental: itemsValidos[0]?.estadoDental || "",
+                items: itemsValidos.map((item) => ({
+                    pieza_codigo: item.piezaCodigo || "",
+                    pieza_numero: item.piezaCodigo || "",
+                    cara: item.cara,
+                    estado_dental: item.estadoDental,
+                    nombre: item.nombre,
+                    tratamiento: item.nombre,
+                    descripcion: item.descripcion || "Sin descripción",
+                    cantidad: item.cantidadNumero,
+                    precio_unitario: item.precioUnitarioNumero,
+                    estado: "Pendiente",
+                })),
             });
 
             await cargarDatos();
-            setFormulario(formularioVacio);
+            limpiarFormulario();
             setMostrarFormulario(false);
-            alert("Presupuesto creado correctamente en Supabase.");
+            alert("Presupuesto creado correctamente con varios conceptos.");
         } catch (errorActual) {
             const mensaje = errorActual instanceof Error ? errorActual.message : "No se pudo crear el presupuesto.";
             setError(mensaje);
@@ -350,7 +447,7 @@ export default function PresupuestosPacientePage() {
     ];
 
     return (
-        <AppShell titulo="Presupuestos" descripcion="Presupuestos clínicos conectados con odontograma, tratamientos y caja" moduloActivo="Pacientes">
+        <AppShell titulo="Presupuestos" descripcion="Presupuestos clínicos conectados con odontograma, tratamientos y caja" moduloActivo="Presupuestos">
             {error && (
                 <section className="mb-4 rounded-2xl border border-red-100 bg-red-50 p-5">
                     <div className="flex items-start gap-3">
@@ -421,7 +518,7 @@ export default function PresupuestosPacientePage() {
                 <div className="border-b border-black/[0.04] px-5 py-4">
                     <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
                         <div><h3 className="text-[18px] font-black text-slate-800">Centro de presupuestos</h3><p className="mt-1 text-xs text-slate-500">Buscá, filtrá y gestioná presupuestos desde una vista limpia.</p></div>
-                        <button type="button" onClick={() => setMostrarFormulario(true)} disabled={guardando || cargando} className="flex w-fit items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"><Plus className="h-4 w-4" /> Nuevo presupuesto</button>
+                        <button type="button" onClick={abrirFormularioNuevo} disabled={guardando || cargando} className="flex w-fit items-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"><Plus className="h-4 w-4" /> Nuevo presupuesto</button>
                     </div>
                 </div>
 
@@ -457,6 +554,8 @@ export default function PresupuestosPacientePage() {
                                             <tbody>{items.slice(0, 4).map((item) => (<tr key={item.id} className="border-t border-slate-100"><td className="px-4 py-4 align-top"><p className="text-sm font-black text-slate-800">{item.nombre}</p><p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{item.descripcion}</p>{(item.pieza_codigo || item.cara || item.estado_dental) && (<div className="mt-2 flex flex-wrap gap-2">{item.pieza_codigo && <span className="rounded-full bg-teal-50 px-2.5 py-1 text-[10px] font-bold text-teal-700">Pieza {item.pieza_codigo}</span>}{item.cara && <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-bold text-blue-700">{etiquetaCara(item.cara)}</span>}{item.estado_dental && <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-700">{item.estado_dental}</span>}</div>)}</td><td className="hidden px-4 py-4 text-center text-sm font-black text-slate-700 md:table-cell">{Number(item.cantidad || 0)}</td><td className="hidden px-4 py-4 text-right text-sm font-black text-slate-700 md:table-cell">{formatoMoneda(Number(item.precio_unitario || 0), configuracion.simboloMoneda)}</td><td className="px-4 py-4 text-right text-sm font-black text-slate-900">{formatoMoneda(Number(item.total || 0), configuracion.simboloMoneda)}</td></tr>))}</tbody></table>
                                     </div>
 
+                                    {items.length > 4 && (<p className="mt-3 text-xs font-bold text-slate-400">+ {items.length - 4} concepto(s) más. Abrí el presupuesto para ver el detalle completo.</p>)}
+
                                     {presupuesto.observaciones && (<div className="mt-4 rounded-2xl bg-blue-50 p-4"><p className="text-[10px] font-bold text-blue-700">Observaciones</p><p className="mt-1 text-xs leading-5 text-blue-700">{presupuesto.observaciones}</p></div>)}
 
                                     <div className="mt-5 flex flex-wrap gap-2">
@@ -481,14 +580,257 @@ export default function PresupuestosPacientePage() {
 
             {mostrarFormulario && (
                 <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/55 px-4 py-6 backdrop-blur-sm">
-                    <div className="w-full max-w-4xl overflow-hidden rounded-[30px] bg-white shadow-[0_30px_90px_rgba(15,23,42,0.35)]">
-                        <div className="flex flex-col gap-3 border-b border-slate-100 bg-slate-900 px-6 py-5 text-white md:flex-row md:items-center md:justify-between"><div><h3 className="text-xl font-black">Nuevo presupuesto manual</h3><p className="mt-1 text-xs text-white/50">Para presupuestos creados fuera del odontograma.</p></div><button type="button" onClick={() => setMostrarFormulario(false)} className="flex w-fit items-center gap-2 rounded-xl bg-white/10 px-4 py-2 text-[12px] font-bold text-white hover:bg-white/15"><XCircle className="h-4 w-4" /> Cerrar</button></div>
+                    <div className="w-full max-w-6xl overflow-hidden rounded-[30px] bg-white shadow-[0_30px_90px_rgba(15,23,42,0.35)]">
+                        <div className="flex flex-col gap-3 border-b border-slate-100 bg-slate-900 px-6 py-5 text-white md:flex-row md:items-center md:justify-between">
+                            <div>
+                                <h3 className="text-xl font-black">Nuevo presupuesto manual</h3>
+                                <p className="mt-1 text-xs text-white/50">
+                                    Agregá varios tratamientos, productos o procedimientos dentro del mismo presupuesto.
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setMostrarFormulario(false)} className="flex w-fit items-center gap-2 rounded-xl bg-white/10 px-4 py-2 text-[12px] font-bold text-white hover:bg-white/15"><XCircle className="h-4 w-4" /> Cerrar</button>
+                        </div>
+
                         <form onSubmit={crearPresupuestoManual} className="space-y-5 p-6">
-                            <div className="grid gap-4 md:grid-cols-[1fr_190px_190px]"><div><label className="mb-2 block text-[12px] font-black text-slate-700">Tratamiento / Procedimiento</label><input value={formulario.nombre} onChange={(event) => actualizarCampo("nombre", event.target.value)} placeholder="Ejemplo: Limpieza dental, restauración, corona..." className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100" /></div><div><label className="mb-2 block text-[12px] font-black text-slate-700">Cantidad</label><input value={formulario.cantidad} onChange={(event) => actualizarCampo("cantidad", event.target.value)} type="number" className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100" /></div><div><label className="mb-2 block text-[12px] font-black text-slate-700">Precio unitario</label><input value={formulario.precioUnitario} onChange={(event) => actualizarCampo("precioUnitario", event.target.value)} type="number" className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100" /></div></div>
-                            <div className="grid gap-4 md:grid-cols-[1fr_190px]"><div><label className="mb-2 block text-[12px] font-black text-slate-700">Descripción</label><textarea value={formulario.descripcion} onChange={(event) => actualizarCampo("descripcion", event.target.value)} rows={4} placeholder="Detalle del tratamiento o procedimiento..." className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100" /></div><div><label className="mb-2 block text-[12px] font-black text-slate-700">Descuento</label><input value={formulario.descuento} onChange={(event) => actualizarCampo("descuento", event.target.value)} type="number" className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100" /></div></div>
-                            <div className="rounded-3xl bg-slate-50 p-4"><h4 className="text-sm font-black text-slate-800">Relación odontológica opcional</h4><div className="mt-4 grid gap-4 md:grid-cols-3"><input value={formulario.piezaCodigo} onChange={(event) => actualizarCampo("piezaCodigo", event.target.value)} placeholder="Pieza FDI. Ej: 16" className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100" /><select value={formulario.cara} onChange={(event) => actualizarCampo("cara", event.target.value as CaraDentalSupabase | "")} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"><option value="">Cara dental</option>{carasDentales.map((cara) => (<option key={cara.valor} value={cara.valor}>{cara.etiqueta}</option>))}</select><select value={formulario.estadoDental} onChange={(event) => actualizarCampo("estadoDental", event.target.value as EstadoDentalSupabase | "")} className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"><option value="">Estado dental</option>{estadosDentales.map((estado) => (<option key={estado}>{estado}</option>))}</select></div></div>
-                            <div><label className="mb-2 block text-[12px] font-black text-slate-700">Observaciones</label><textarea value={formulario.observaciones} onChange={(event) => actualizarCampo("observaciones", event.target.value)} rows={3} placeholder="Condiciones, vigencia, notas para el paciente..." className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100" /></div>
-                            <div className="flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end"><button type="button" onClick={() => { setFormulario(formularioVacio); setMostrarFormulario(false); }} className="flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50">Cancelar</button><button disabled={guardando} className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"><Save className="h-4 w-4" /> {guardando ? "Guardando..." : "Guardar presupuesto"}</button></div>
+                            <section className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                                    <div>
+                                        <h4 className="text-sm font-black text-slate-800">
+                                            Conceptos del presupuesto
+                                        </h4>
+                                        <p className="mt-1 text-xs font-semibold text-slate-500">
+                                            Podés agregar varias líneas. El subtotal y total se calculan automáticamente.
+                                        </p>
+                                    </div>
+
+                                    <button
+                                        type="button"
+                                        onClick={agregarItem}
+                                        className="flex w-fit items-center gap-2 rounded-xl bg-teal-600 px-4 py-3 text-[12px] font-black text-white hover:bg-teal-700"
+                                    >
+                                        <Plus className="h-4 w-4" />
+                                        Agregar concepto
+                                    </button>
+                                </div>
+
+                                <div className="mt-4 space-y-4">
+                                    {formulario.items.map((item, indice) => {
+                                        const totalItem = numero(item.cantidad) * numero(item.precioUnitario);
+
+                                        return (
+                                            <div
+                                                key={item.idLocal}
+                                                className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"
+                                            >
+                                                <div className="mb-4 flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-sm font-black text-slate-800">
+                                                            Concepto {indice + 1}
+                                                        </p>
+                                                        <p className="mt-0.5 text-xs font-semibold text-slate-400">
+                                                            Total: {formatoMoneda(totalItem, configuracion.simboloMoneda)}
+                                                        </p>
+                                                    </div>
+
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => eliminarItem(item.idLocal)}
+                                                        className="flex items-center gap-2 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-black text-red-700 hover:bg-red-100"
+                                                    >
+                                                        <Trash2 className="h-3.5 w-3.5" />
+                                                        Quitar
+                                                    </button>
+                                                </div>
+
+                                                <div className="grid gap-4 md:grid-cols-[1fr_120px_170px]">
+                                                    <div>
+                                                        <label className="mb-2 block text-[12px] font-black text-slate-700">
+                                                            Tratamiento / Procedimiento *
+                                                        </label>
+                                                        <input
+                                                            value={item.nombre}
+                                                            onChange={(event) =>
+                                                                actualizarItem(item.idLocal, "nombre", event.target.value)
+                                                            }
+                                                            placeholder="Ejemplo: Limpieza dental, resina, extracción..."
+                                                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                        />
+                                                    </div>
+
+                                                    <div>
+                                                        <label className="mb-2 block text-[12px] font-black text-slate-700">
+                                                            Cantidad
+                                                        </label>
+                                                        <input
+                                                            value={item.cantidad}
+                                                            onChange={(event) =>
+                                                                actualizarItem(item.idLocal, "cantidad", event.target.value)
+                                                            }
+                                                            type="number"
+                                                            min="0"
+                                                            step="1"
+                                                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                        />
+                                                    </div>
+
+                                                    <div>
+                                                        <label className="mb-2 block text-[12px] font-black text-slate-700">
+                                                            Precio unitario
+                                                        </label>
+                                                        <input
+                                                            value={item.precioUnitario}
+                                                            onChange={(event) =>
+                                                                actualizarItem(item.idLocal, "precioUnitario", event.target.value)
+                                                            }
+                                                            type="number"
+                                                            min="0"
+                                                            step="0.01"
+                                                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div className="mt-4">
+                                                    <label className="mb-2 block text-[12px] font-black text-slate-700">
+                                                        Descripción
+                                                    </label>
+                                                    <textarea
+                                                        value={item.descripcion}
+                                                        onChange={(event) =>
+                                                            actualizarItem(item.idLocal, "descripcion", event.target.value)
+                                                        }
+                                                        rows={2}
+                                                        placeholder="Detalle del tratamiento, condiciones o material utilizado..."
+                                                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                    />
+                                                </div>
+
+                                                <div className="mt-4 rounded-3xl bg-slate-50 p-4">
+                                                    <h5 className="text-xs font-black text-slate-700">
+                                                        Relación odontológica opcional
+                                                    </h5>
+
+                                                    <div className="mt-3 grid gap-4 md:grid-cols-3">
+                                                        <input
+                                                            value={item.piezaCodigo}
+                                                            onChange={(event) =>
+                                                                actualizarItem(item.idLocal, "piezaCodigo", event.target.value)
+                                                            }
+                                                            placeholder="Pieza FDI. Ej: 16"
+                                                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                        />
+
+                                                        <select
+                                                            value={item.cara}
+                                                            onChange={(event) =>
+                                                                actualizarItem(
+                                                                    item.idLocal,
+                                                                    "cara",
+                                                                    event.target.value as CaraDentalSupabase | ""
+                                                                )
+                                                            }
+                                                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                        >
+                                                            <option value="">Cara dental</option>
+                                                            {carasDentales.map((cara) => (
+                                                                <option key={cara.valor} value={cara.valor}>{cara.etiqueta}</option>
+                                                            ))}
+                                                        </select>
+
+                                                        <select
+                                                            value={item.estadoDental}
+                                                            onChange={(event) =>
+                                                                actualizarItem(
+                                                                    item.idLocal,
+                                                                    "estadoDental",
+                                                                    event.target.value as EstadoDentalSupabase | ""
+                                                                )
+                                                            }
+                                                            className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                                        >
+                                                            <option value="">Estado dental</option>
+                                                            {estadosDentales.map((estado) => (<option key={estado}>{estado}</option>))}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </section>
+
+                            <section className="grid gap-4 lg:grid-cols-[1fr_340px]">
+                                <div>
+                                    <label className="mb-2 block text-[12px] font-black text-slate-700">
+                                        Observaciones generales
+                                    </label>
+                                    <textarea
+                                        value={formulario.observaciones}
+                                        onChange={(event) => actualizarCampo("observaciones", event.target.value)}
+                                        rows={5}
+                                        placeholder="Condiciones, vigencia, notas para el paciente..."
+                                        className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-[13px] font-medium outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                    />
+                                </div>
+
+                                <div className="rounded-3xl bg-slate-900 p-5 text-white">
+                                    <h4 className="text-sm font-black">
+                                        Resumen del presupuesto
+                                    </h4>
+
+                                    <div className="mt-4 space-y-3">
+                                        <div className="flex items-center justify-between gap-4">
+                                            <span className="text-xs font-semibold text-white/50">Subtotal</span>
+                                            <span className="text-sm font-black">
+                                                {formatoMoneda(subtotalFormulario, configuracion.simboloMoneda)}
+                                            </span>
+                                        </div>
+
+                                        <div>
+                                            <label className="mb-2 block text-xs font-bold text-white/60">
+                                                Descuento
+                                            </label>
+                                            <input
+                                                value={formulario.descuento}
+                                                onChange={(event) => actualizarCampo("descuento", event.target.value)}
+                                                type="number"
+                                                min="0"
+                                                step="0.01"
+                                                className="w-full rounded-2xl border border-white/10 bg-white px-4 py-3 text-sm font-bold text-slate-900 outline-none focus:border-teal-400 focus:ring-4 focus:ring-teal-100"
+                                            />
+                                        </div>
+
+                                        <div className="border-t border-white/10 pt-4">
+                                            <div className="flex items-center justify-between gap-4">
+                                                <span className="text-xs font-semibold text-white/50">Total</span>
+                                                <span className="text-2xl font-black text-teal-300">
+                                                    {formatoMoneda(totalFormulario, configuracion.simboloMoneda)}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </section>
+
+                            <div className="flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        limpiarFormulario();
+                                        setMostrarFormulario(false);
+                                    }}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                                >
+                                    Cancelar
+                                </button>
+                                <button
+                                    disabled={guardando}
+                                    className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <Save className="h-4 w-4" />
+                                    {guardando ? "Guardando..." : "Guardar presupuesto"}
+                                </button>
+                            </div>
                         </form>
                     </div>
                 </div>
