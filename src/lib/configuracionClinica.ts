@@ -31,6 +31,7 @@ export type ConfiguracionClinica = {
 };
 
 export const CONFIGURACION_KEY = "configuracion_clinica_sistema_clinico";
+export const CONFIGURACION_EVENTO_ACTUALIZADA = "configuracion_clinica_actualizada";
 
 export const POS_PREDETERMINADOS: POSClinica[] = [
     {
@@ -56,12 +57,46 @@ export const CONFIGURACION_PREDETERMINADA: ConfiguracionClinica = {
     mensajeRecibo: "Gracias por su preferencia.",
 };
 
+function normalizarTexto(valor: unknown) {
+    return String(valor || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+}
+
 function normalizarNumero(valor: unknown, valorInicial: number) {
     const convertido = Number(valor);
 
     if (Number.isNaN(convertido)) return valorInicial;
 
     return convertido;
+}
+
+function resolverSimboloMoneda(moneda?: string, simbolo?: string) {
+    const simboloLimpio = String(simbolo || "").trim();
+
+    if (simboloLimpio) return simboloLimpio;
+
+    const monedaNormalizada = normalizarTexto(moneda);
+
+    if (
+        monedaNormalizada.includes("dolar") ||
+        monedaNormalizada.includes("dolares") ||
+        monedaNormalizada.includes("usd")
+    ) {
+        return "$";
+    }
+
+    if (
+        monedaNormalizada.includes("cordoba") ||
+        monedaNormalizada.includes("cordobas") ||
+        monedaNormalizada.includes("nio")
+    ) {
+        return "C$";
+    }
+
+    return CONFIGURACION_PREDETERMINADA.simboloMoneda;
 }
 
 function normalizarConfiguracion(
@@ -97,6 +132,9 @@ function normalizarConfiguracion(
     const primerPOSActivo =
         posesNormalizados.find((pos) => pos.activo) || posesNormalizados[0];
 
+    const moneda =
+        configuracion.moneda || CONFIGURACION_PREDETERMINADA.moneda;
+
     return {
         nombreClinica:
             configuracion.nombreClinica ||
@@ -109,16 +147,23 @@ function normalizarConfiguracion(
         direccion:
             configuracion.direccion || CONFIGURACION_PREDETERMINADA.direccion,
         ruc: configuracion.ruc || CONFIGURACION_PREDETERMINADA.ruc,
-        moneda: configuracion.moneda || CONFIGURACION_PREDETERMINADA.moneda,
-        simboloMoneda:
-            configuracion.simboloMoneda ||
-            CONFIGURACION_PREDETERMINADA.simboloMoneda,
+        moneda,
+        simboloMoneda: resolverSimboloMoneda(
+            moneda,
+            configuracion.simboloMoneda
+        ),
         comisionPOS: primerPOSActivo?.comision ?? comisionAnterior,
         poses: posesNormalizados,
         mensajeRecibo:
             configuracion.mensajeRecibo ||
             CONFIGURACION_PREDETERMINADA.mensajeRecibo,
     };
+}
+
+function notificarConfiguracionActualizada() {
+    if (typeof window === "undefined") return;
+
+    window.dispatchEvent(new CustomEvent(CONFIGURACION_EVENTO_ACTUALIZADA));
 }
 
 export function obtenerConfiguracionClinica(): ConfiguracionClinica {
@@ -129,11 +174,6 @@ export function obtenerConfiguracionClinica(): ConfiguracionClinica {
     const guardada = localStorage.getItem(CONFIGURACION_KEY);
 
     if (!guardada) {
-        localStorage.setItem(
-            CONFIGURACION_KEY,
-            JSON.stringify(CONFIGURACION_PREDETERMINADA)
-        );
-
         return CONFIGURACION_PREDETERMINADA;
     }
 
@@ -169,6 +209,8 @@ export function guardarConfiguracionClinica(
         CONFIGURACION_KEY,
         JSON.stringify(configuracionNormalizada)
     );
+
+    notificarConfiguracionActualizada();
 }
 
 export function obtenerPOSActivos(): POSClinica[] {

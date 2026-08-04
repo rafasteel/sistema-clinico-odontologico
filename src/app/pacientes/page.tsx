@@ -25,6 +25,12 @@ import {
 } from "lucide-react";
 import AppShell from "@/components/AppShell";
 import {
+    ConfiguracionClinica,
+    CONFIGURACION_PREDETERMINADA,
+    obtenerConfiguracionClinica,
+} from "@/lib/configuracionClinica";
+import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
+import {
     actualizarPacienteSupabase,
     cambiarEstadoPacienteSupabase,
     crearPacienteSupabase,
@@ -171,8 +177,8 @@ function pacienteTieneAlertas(paciente: Paciente) {
     );
 }
 
-function formatoMoneda(valor: number) {
-    return `C$ ${(valor || 0).toLocaleString("es-NI", {
+function formatoMoneda(valor: number, simbolo = "C$") {
+    return `${simbolo} ${(valor || 0).toLocaleString("es-NI", {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
     })}`;
@@ -295,6 +301,11 @@ function colorEstado(estado: Paciente["estado"]) {
 }
 
 export default function PacientesPage() {
+    const [configuracion, setConfiguracion] = useState<ConfiguracionClinica>(() => {
+        if (typeof window === "undefined") return CONFIGURACION_PREDETERMINADA;
+
+        return obtenerConfiguracionClinica();
+    });
     const [pacientes, setPacientes] = useState<Paciente[]>([]);
     const [cuentasCobrar, setCuentasCobrar] = useState<CuentaPorCobrar[]>([]);
     const [formulario, setFormulario] =
@@ -317,6 +328,12 @@ export default function PacientesPage() {
         setErrorCarga("");
 
         try {
+            try {
+                setConfiguracion(await obtenerConfiguracionClinicaSupabase());
+            } catch {
+                setConfiguracion(obtenerConfiguracionClinica());
+            }
+
             const [listaSupabase, cuentasSupabase] = await Promise.all([
                 listarPacientesSupabase(),
                 listarCuentasCobrarSupabase(),
@@ -620,7 +637,7 @@ export default function PacientesPage() {
                             <BadgeDollarSign className="h-4 w-4 text-rose-700" />
                         </div>
                         <p className="mt-2 text-lg font-black text-rose-800">
-                            {formatoMoneda(saldoTotal)}
+                            {formatoMoneda(saldoTotal, configuracion.simboloMoneda)}
                         </p>
                         <p className="mt-1 text-[10px] font-bold text-rose-600">
                             {pacientesConSaldo} paciente(s)
@@ -784,7 +801,7 @@ export default function PacientesPage() {
                                                             : "text-emerald-600"
                                                     }
                                                 >
-                                                    {formatoMoneda(saldoActual)}
+                                                    {formatoMoneda(saldoActual, configuracion.simboloMoneda)}
                                                 </span>
                                             </td>
 
@@ -894,7 +911,7 @@ export default function PacientesPage() {
 
                                                 {saldoActual > 0 && (
                                                     <span className="rounded-full bg-rose-50 px-2.5 py-1 text-[10px] font-bold text-rose-700">
-                                                        Debe {formatoMoneda(saldoActual)}
+                                                        Debe {formatoMoneda(saldoActual, configuracion.simboloMoneda)}
                                                     </span>
                                                 )}
                                             </div>

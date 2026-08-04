@@ -36,7 +36,9 @@ import {
 import type { LucideIcon } from "lucide-react";
 import {
     ConfiguracionClinica,
+    CONFIGURACION_EVENTO_ACTUALIZADA,
     CONFIGURACION_PREDETERMINADA,
+    guardarConfiguracionClinica,
     obtenerConfiguracionClinica,
 } from "@/lib/configuracionClinica";
 import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
@@ -349,6 +351,28 @@ export default function AppShell({
         useState<LicenciaClinica | null>(null);
 
     useEffect(() => {
+        if (typeof window === "undefined") return;
+
+        function actualizarConfiguracionDesdeCache() {
+            setConfiguracion(obtenerConfiguracionClinica());
+        }
+
+        window.addEventListener(
+            CONFIGURACION_EVENTO_ACTUALIZADA,
+            actualizarConfiguracionDesdeCache
+        );
+        window.addEventListener("storage", actualizarConfiguracionDesdeCache);
+
+        return () => {
+            window.removeEventListener(
+                CONFIGURACION_EVENTO_ACTUALIZADA,
+                actualizarConfiguracionDesdeCache
+            );
+            window.removeEventListener("storage", actualizarConfiguracionDesdeCache);
+        };
+    }, []);
+
+    useEffect(() => {
         let componenteActivo = true;
 
         async function cargarSistema() {
@@ -411,13 +435,16 @@ export default function AppShell({
 
                 if (!componenteActivo) return;
 
-                setConfiguracion({
+                const configuracionFinal = {
                     ...configuracionActual,
                     nombreClinica:
                         configuracionActual.nombreClinica ||
                         licencia.clinica?.nombre ||
                         configuracionActual.nombreClinica,
-                });
+                };
+
+                guardarConfiguracionClinica(configuracionFinal);
+                setConfiguracion(configuracionFinal);
 
                 try {
                     const notificaciones = generarNotificacionesSistema({

@@ -1,8 +1,8 @@
 import { crearClienteSupabase } from "@/lib/supabase/client";
 import { obtenerPerfilActual } from "@/lib/supabase/perfil";
 import {
-    CONFIGURACION_KEY,
     CONFIGURACION_PREDETERMINADA,
+    guardarConfiguracionClinica,
     type ConfiguracionClinica,
     type POSClinica,
 } from "@/lib/configuracionClinica";
@@ -56,11 +56,6 @@ function numero(valor: unknown, valorInicial = 0) {
     return convertido;
 }
 
-function guardarConfigLocal(configuracion: ConfiguracionClinica) {
-    if (typeof window === "undefined") return;
-
-    localStorage.setItem(CONFIGURACION_KEY, JSON.stringify(configuracion));
-}
 
 function normalizarConfig(
     configuracion?: Partial<ConfiguracionClinica>,
@@ -245,7 +240,7 @@ export async function obtenerConfiguracionClinicaSupabase() {
     }
 
     const configuracionFinal = convertirDesdeSupabase(configuracion, poses);
-    guardarConfigLocal(configuracionFinal);
+    guardarConfiguracionClinica(configuracionFinal);
 
     return configuracionFinal;
 }
@@ -306,7 +301,7 @@ export async function guardarConfiguracionClinicaSupabase(
     }
 
     const configuracionFinal = await obtenerConfiguracionClinicaSupabase();
-    guardarConfigLocal(configuracionFinal);
+    guardarConfiguracionClinica(configuracionFinal);
 
     return configuracionFinal;
 }
