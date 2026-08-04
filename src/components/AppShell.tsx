@@ -115,6 +115,13 @@ const modulos: ModuloSistema[] = [
         grupo: "Clínica",
     },
     {
+        nombre: "Presupuestos",
+        href: "/presupuestos",
+        roles: ["ADMIN", "DOCTOR", "RECEPCION"],
+        icono: FileText,
+        grupo: "Clínica",
+    },
+    {
         nombre: "Doctores y Servicios",
         href: "/doctores-servicios",
         roles: ["ADMIN", "DOCTOR", "RECEPCION"],
