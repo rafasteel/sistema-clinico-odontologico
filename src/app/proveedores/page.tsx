@@ -509,7 +509,7 @@ export default function ProveedoresPage() {
         if (!confirmar) return;
         setGuardando(true);
         try {
-            await anularCompraProveedorSupabase(compra.id, usuario?.nombre || "Usuario no identificado");
+            await anularCompraProveedorSupabase(compra.id);
             await cargarDatos();
             alert("Compra anulada correctamente.");
         } catch (errorActual) {

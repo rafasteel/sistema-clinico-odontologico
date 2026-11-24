@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
     AlertTriangle,
@@ -111,6 +111,7 @@ type HistorialOdontograma = {
 
 type OdontogramaPaciente = {
     pacienteId: string;
+    version?: number;
     actualizadoEn: string;
     piezas: PiezaDental[];
     historial: HistorialOdontograma[];
@@ -170,6 +171,7 @@ type TratamientoPendienteAgenda = {
 
 type OdontogramaLegacy = {
     pacienteId?: string;
+    version?: number;
     actualizadoEn?: string;
     piezas?: {
         numero?: number;
@@ -583,6 +585,7 @@ function normalizarOdontograma(
 
     return {
         pacienteId,
+        version: odontograma.version ?? 0,
         actualizadoEn: odontograma.actualizadoEn || "",
         piezas: piezasNormalizadas,
         historial: historialNormalizado,
@@ -640,6 +643,8 @@ export default function OdontogramaPage() {
         CONFIGURACION_PREDETERMINADA
     );
     const [usuario, setUsuario] = useState<UsuarioSistema | null>(null);
+    const [guardandoOdontograma, setGuardandoOdontograma] = useState(false);
+    const guardadoEnCursoRef = useRef(false);
     const [paciente, setPaciente] = useState<Paciente | null>(null);
     const [odontograma, setOdontograma] = useState<OdontogramaPaciente | null>(
         null
@@ -946,19 +951,26 @@ export default function OdontogramaPage() {
         setNotaEdicion(piezaInicial.nota || "");
     }
 
-    function guardarOdontogramaActual(nuevoOdontograma: OdontogramaPaciente) {
-        setOdontograma(nuevoOdontograma);
+    async function guardarOdontogramaActual(nuevoOdontograma: OdontogramaPaciente) {
+        if (guardadoEnCursoRef.current) return;
+        guardadoEnCursoRef.current = true;
+        setGuardandoOdontograma(true);
         setError("");
-
-        guardarOdontogramaSupabase(nuevoOdontograma).catch((errorActual) => {
+        try {
+            const guardado = await guardarOdontogramaSupabase(nuevoOdontograma);
+            if (!guardado) throw new Error("No se pudo confirmar el odontograma guardado.");
+            setOdontograma(normalizarOdontograma(nuevoOdontograma.pacienteId, guardado as OdontogramaLegacy));
+        } catch (errorActual) {
             const mensaje =
                 errorActual instanceof Error
                     ? errorActual.message
                     : "No se pudo guardar el odontograma en Supabase.";
-
             setError(mensaje);
             alert(mensaje);
-        });
+        } finally {
+            guardadoEnCursoRef.current = false;
+            setGuardandoOdontograma(false);
+        }
     }
 
     function seleccionarPieza(codigo: string) {
@@ -1005,7 +1017,7 @@ export default function OdontogramaPage() {
         });
 
         const nuevoHistorial: HistorialOdontograma = {
-            id: `HIST-${Date.now()}`,
+            id: crypto.randomUUID(),
             fecha: fechaHoyLocal(),
             hora: horaActualLocal(),
             piezaCodigo: piezaSeleccionada,
@@ -1047,7 +1059,7 @@ export default function OdontogramaPage() {
         });
 
         const nuevoHistorial: HistorialOdontograma = {
-            id: `HIST-${Date.now()}`,
+            id: crypto.randomUUID(),
             fecha: fechaHoyLocal(),
             hora: horaActualLocal(),
             piezaCodigo: piezaSeleccionada,
@@ -1089,7 +1101,7 @@ export default function OdontogramaPage() {
         });
 
         const nuevoHistorial: HistorialOdontograma = {
-            id: `HIST-${Date.now()}`,
+            id: crypto.randomUUID(),
             fecha: fechaHoyLocal(),
             hora: horaActualLocal(),
             piezaCodigo: piezaSeleccionada,
@@ -1121,7 +1133,7 @@ export default function OdontogramaPage() {
         if (!confirmar) return;
 
         const nuevoHistorial: HistorialOdontograma = {
-            id: `HIST-${Date.now()}`,
+            id: crypto.randomUUID(),
             fecha: fechaHoyLocal(),
             hora: horaActualLocal(),
             piezaCodigo: "TODAS",
@@ -1446,7 +1458,7 @@ export default function OdontogramaPage() {
                         Odontograma conectado a Supabase
                     </p>
                     <p className="mt-1 text-xs font-semibold text-slate-500">
-                        Hallazgos, superficies e historial se guardan por paciente en la base de datos.
+                        {guardandoOdontograma ? "Guardando cambios del odontograma..." : "Hallazgos, superficies e historial se guardan por paciente en la base de datos."}
                     </p>
                 </div>
 
@@ -1863,7 +1875,7 @@ export default function OdontogramaPage() {
                                 <button
                                     type="button"
                                     onClick={aplicarEstadoEnCara}
-                                    disabled={guardando}
+                                    disabled={guardandoOdontograma || guardando}
                                     className="flex items-center justify-center gap-2 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-600 px-5 py-3 text-[12px] font-bold text-white shadow-[0_4px_14px_rgba(13,148,136,0.35)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <Save className="h-4 w-4" />
@@ -1873,7 +1885,7 @@ export default function OdontogramaPage() {
                                 <button
                                     type="button"
                                     onClick={aplicarEstadoEnTodaLaPieza}
-                                    disabled={guardando}
+                                    disabled={guardandoOdontograma || guardando}
                                     className="flex items-center justify-center gap-2 rounded-xl bg-slate-900 px-5 py-3 text-[12px] font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                     <CheckCircle2 className="h-4 w-4" />
@@ -1883,6 +1895,7 @@ export default function OdontogramaPage() {
                                 <button
                                     type="button"
                                     onClick={limpiarPiezaSeleccionada}
+                                    disabled={guardandoOdontograma}
                                     className="flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-[12px] font-bold text-slate-700 shadow-sm hover:bg-slate-50"
                                 >
                                     <RefreshCcw className="h-4 w-4" />
@@ -1892,6 +1905,7 @@ export default function OdontogramaPage() {
                                 <button
                                     type="button"
                                     onClick={limpiarOdontogramaCompleto}
+                                    disabled={guardandoOdontograma}
                                     className="flex items-center justify-center gap-2 rounded-xl bg-red-50 px-5 py-3 text-[12px] font-bold text-red-700 hover:bg-red-100"
                                 >
                                     <RefreshCcw className="h-4 w-4" />

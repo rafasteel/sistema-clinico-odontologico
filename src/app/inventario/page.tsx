@@ -53,6 +53,7 @@ type EstadoProducto = EstadoProductoInventarioSupabase;
 
 type Producto = {
     id: string;
+    actualizadoEn: string;
     codigo: string;
     nombre: string;
     categoria: string;
@@ -84,6 +85,7 @@ type MovimientoInventario = {
 };
 
 type FormularioProducto = {
+    actualizadoEnEsperado?: string;
     codigo: string;
     nombre: string;
     categoria: string;
@@ -188,6 +190,7 @@ function normalizarTexto(valor: unknown) {
 function convertirProducto(producto: ProductoInventarioSupabase): Producto {
     return {
         id: producto.id,
+        actualizadoEn: producto.actualizado_en,
         codigo: producto.codigo || "",
         nombre: producto.nombre || "",
         categoria: producto.categoria || "",
@@ -369,6 +372,7 @@ export default function InventarioPage() {
                 precio_venta: numero(formularioProducto.precioVenta),
                 proveedor: formularioProducto.proveedor.trim(),
                 vencimiento: formularioProducto.vencimiento,
+                actualizado_en_esperado: formularioProducto.actualizadoEnEsperado,
             };
 
             if (productoEditandoId) {
@@ -398,6 +402,7 @@ export default function InventarioPage() {
     function editarProducto(producto: Producto) {
         setProductoEditandoId(producto.id);
         setFormularioProducto({
+            actualizadoEnEsperado: producto.actualizadoEn,
             codigo: producto.codigo,
             nombre: producto.nombre,
             categoria: producto.categoria,

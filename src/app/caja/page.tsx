@@ -27,13 +27,11 @@ import {
 } from "@/lib/configuracionClinica";
 import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
-    cambiarEstadoCitaSupabase,
     listarCitasSupabase,
     type CitaSupabase,
     type EstadoCitaSupabase,
 } from "@/lib/supabase/citas";
 import {
-    anularCuentaCobrarSupabase,
     anularVentaSupabase,
     listarCuentasCobrarSupabase,
     listarVentasSupabase,
@@ -45,9 +43,7 @@ import {
     type VentaSupabase,
 } from "@/lib/supabase/finanzas";
 import {
-    descontarStockProductoVentaSupabase,
     listarProductosActivosVentaSupabase,
-    revertirSalidaInventarioPorReferenciaSupabase,
     type ProductoInventarioSupabase,
 } from "@/lib/supabase/inventario";
 
@@ -655,7 +651,7 @@ export default function CajaPage() {
         setGuardando(true);
 
         try {
-            const resultado = await registrarVentaSupabase({
+            await registrarVentaSupabase({
                 tipo_cobro: formulario.tipoCobro,
                 cita_id: formulario.citaId || null,
                 paciente_id: formulario.pacienteId || null,
@@ -677,22 +673,9 @@ export default function CajaPage() {
                 fecha_vencimiento_credito: formulario.fechaVencimiento,
                 observaciones: formulario.observaciones.trim(),
                 usuario_nombre: usuario?.nombre || "Usuario no identificado",
+                producto_id: formulario.tipoCobro === "Producto" ? productoSeleccionado?.id : undefined,
+                cantidad_producto: formulario.tipoCobro === "Producto" ? numero(formulario.cantidadProducto) : undefined,
             });
-
-            if (formulario.citaId && credito > 0) {
-                await cambiarEstadoCitaSupabase(formulario.citaId, "Atendida");
-            }
-
-            if (formulario.tipoCobro === "Producto" && productoSeleccionado) {
-                const cantidad = numero(formulario.cantidadProducto);
-
-                await descontarStockProductoVentaSupabase(
-                    productoSeleccionado.id,
-                    cantidad,
-                    `Venta registrada en caja. Venta: ${resultado.venta.id}`,
-                    resultado.venta.id
-                );
-            }
 
             setFormulario({
                 ...formularioCajaVacio,
@@ -794,30 +777,6 @@ export default function CajaPage() {
 
         try {
             await anularVentaSupabase(venta.id);
-
-            const cuentaRelacionada = cuentas.find(
-                (cuenta) => cuenta.ventaId === venta.id && cuenta.estado !== "Anulada"
-            );
-
-            if (cuentaRelacionada) {
-                await anularCuentaCobrarSupabase(cuentaRelacionada.id);
-            }
-
-            if (venta.citaId) {
-                await cambiarEstadoCitaSupabase(venta.citaId, "Atendida");
-            }
-
-            if (venta.tipoCobro === "Producto") {
-                try {
-                    await revertirSalidaInventarioPorReferenciaSupabase(
-                        venta.id,
-                        `Reversión de stock por anulación de venta ${venta.id}`,
-                        usuario?.nombre || "Usuario no identificado"
-                    );
-                } catch {
-                    // No bloqueamos la anulación si no encontramos movimiento de inventario.
-                }
-            }
 
             await cargarDatos();
 

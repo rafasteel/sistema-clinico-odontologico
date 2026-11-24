@@ -42,3 +42,9 @@ La implementación, las migraciones aplicadas y las pruebas de la primera fase e
 ```bash
 npm run test:seguridad
 ```
+
+La [fase 2 de integridad de datos](docs/auditoria-fase-2.md) incorpora transacciones, reintentos seguros e historial clínico acumulativo.
+
+```bash
+npm run test:integridad
+```

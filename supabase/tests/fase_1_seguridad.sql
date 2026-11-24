@@ -17,7 +17,7 @@ declare rechazado boolean := false;
 begin
     begin execute consulta;
     exception when others then
-        if sqlstate <> codigo then raise; end if;
+        if not (sqlstate = any(string_to_array(codigo,','))) then raise; end if;
         rechazado := true;
     end;
     perform pg_temp.comprobar(rechazado, nombre);
@@ -129,8 +129,9 @@ select pg_temp.denegado($q$update public.presupuesto_items set paciente_id = pg_
 select pg_temp.denegado($q$update public.odontogramas set paciente_id = pg_temp.id('pacientes_B_libre') where id = pg_temp.id('odontogramas_A')$q$, '23503', 'odontogramas.paciente_id: cruce rechazado');
 select pg_temp.denegado($q$update public.odontograma_piezas set odontograma_id = pg_temp.id('odontogramas_B') where id = pg_temp.id('odontograma_piezas_A')$q$, '23503', 'odontograma_piezas.odontograma_id: cruce rechazado');
 select pg_temp.denegado($q$update public.odontograma_piezas set paciente_id = pg_temp.id('pacientes_B') where id = pg_temp.id('odontograma_piezas_A')$q$, '23503', 'odontograma_piezas.paciente_id: cruce rechazado');
-select pg_temp.denegado($q$update public.odontograma_historial set odontograma_id = pg_temp.id('odontogramas_B') where id = pg_temp.id('odontograma_historial_A')$q$, '23503', 'odontograma_historial.odontograma_id: cruce rechazado');
-select pg_temp.denegado($q$update public.odontograma_historial set paciente_id = pg_temp.id('pacientes_B') where id = pg_temp.id('odontograma_historial_A')$q$, '23503', 'odontograma_historial.paciente_id: cruce rechazado');
+-- Fase 2 puede rechazar antes de la FK porque el historial es inmutable.
+select pg_temp.denegado($q$update public.odontograma_historial set odontograma_id = pg_temp.id('odontogramas_B') where id = pg_temp.id('odontograma_historial_A')$q$, '23503,42501', 'odontograma_historial.odontograma_id: cruce rechazado');
+select pg_temp.denegado($q$update public.odontograma_historial set paciente_id = pg_temp.id('pacientes_B') where id = pg_temp.id('odontograma_historial_A')$q$, '23503,42501', 'odontograma_historial.paciente_id: cruce rechazado');
 select pg_temp.denegado($q$update public.documentos_pacientes set paciente_id = pg_temp.id('pacientes_B'), storage_path = pg_temp.id('clinica_A')||'/'||pg_temp.id('pacientes_B')||'/prueba.pdf' where id = pg_temp.id('documentos_pacientes_A')$q$, '23503', 'documentos_pacientes.paciente_id: cruce rechazado');
 select pg_temp.denegado($q$update public.ordenes_estudio set paciente_id = pg_temp.id('pacientes_B') where id = pg_temp.id('ordenes_estudio_A')$q$, '23503', 'ordenes_estudio.paciente_id: cruce rechazado');
 
@@ -234,7 +235,7 @@ reset role;
 select pg_temp.denegado($q$delete from public.auditoria where id=pg_temp.id('audit')$q$,'42501','Trigger impide borrado incluso con privilegios SQL');
 select pg_temp.denegado($q$update public.auditoria set accion='Falso' where id=pg_temp.id('audit')$q$,'42501','Trigger impide modificacion incluso con privilegios SQL');
 select pg_temp.denegado($q$truncate public.auditoria$q$,'42501','Trigger impide TRUNCATE');
-select pg_temp.denegado($q$delete from public.clinicas where id=pg_temp.id('clinica_A')$q$,'23503','Borrar clinica no destruye auditoria');
+select pg_temp.denegado($q$delete from public.clinicas where id=pg_temp.id('clinica_A')$q$,'23503,42501','Borrar clinica no destruye auditoria');
 select pg_temp.denegado($q$delete from public.usuarios_perfiles where id=pg_temp.id('perfil_ADMIN')$q$,'23503','Borrar perfil no destruye autor de auditoria');
 set local role anon;
 select pg_temp.denegado($q$select public.verificar_acceso_clinica()$q$,'42501','Anonimo no consulta licencia');
