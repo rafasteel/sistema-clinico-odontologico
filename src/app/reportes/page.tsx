@@ -1,9 +1,11 @@
 "use client";
 
+import { resumirVentas, esAbonoVenta } from "@/lib/resumenFinanciero";
+
+
 import { useEffect, useMemo, useState } from "react";
 import {
     AlertTriangle,
-    BadgeDollarSign,
     Banknote,
     BarChart3,
     CalendarDays,
@@ -690,10 +692,7 @@ export default function ReportesPage() {
         );
     }, [cierres, mesSeleccionado]);
 
-    const ventasBrutas = ventasPeriodo.reduce(
-        (total, venta) => total + (venta.total || 0),
-        0
-    );
+    const ventasBrutas = resumirVentas(ventasPeriodo).ventasBrutas;
 
     const efectivo = ventasPeriodo.reduce(
         (total, venta) => total + (venta.efectivo || 0),
@@ -820,7 +819,7 @@ export default function ReportesPage() {
     const ventasPorTipo = useMemo(() => {
         const mapa = new Map<string, number>();
 
-        ventasPeriodo.forEach((venta) => {
+        ventasPeriodo.filter((venta) => !esAbonoVenta(venta)).forEach((venta) => {
             mapa.set(venta.tipoCobro, (mapa.get(venta.tipoCobro) || 0) + venta.total);
         });
 
@@ -889,10 +888,9 @@ export default function ReportesPage() {
             "Distribución de ingresos",
             ["Forma de pago", "Monto", "Participación"],
             [
-                ["Efectivo", { valor: formatoMoneda(efectivo, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(efectivo, ventasBrutas || ingresosCobrados).toFixed(0)}%`],
-                ["Tarjeta", { valor: formatoMoneda(tarjeta, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(tarjeta, ventasBrutas || ingresosCobrados).toFixed(0)}%`],
-                ["Transferencia", { valor: formatoMoneda(transferencia, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(transferencia, ventasBrutas || ingresosCobrados).toFixed(0)}%`],
-                ["Crédito", { valor: formatoMoneda(creditoGenerado, configuracion.simboloMoneda), clase: "monto alerta" }, `${porcentaje(creditoGenerado, ventasBrutas || ingresosCobrados).toFixed(0)}%`],
+                ["Efectivo", { valor: formatoMoneda(efectivo, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(efectivo, ingresosCobrados).toFixed(0)}%`],
+                ["Tarjeta", { valor: formatoMoneda(tarjeta, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(tarjeta, ingresosCobrados).toFixed(0)}%`],
+                ["Transferencia", { valor: formatoMoneda(transferencia, configuracion.simboloMoneda), clase: "monto" }, `${porcentaje(transferencia, ingresosCobrados).toFixed(0)}%`],
             ]
         );
 
@@ -1380,10 +1378,9 @@ export default function ReportesPage() {
                                 { nombre: "Efectivo", total: efectivo, icono: Banknote },
                                 { nombre: "Tarjeta", total: tarjeta, icono: CreditCard },
                                 { nombre: "Transferencia", total: transferencia, icono: FileText },
-                                { nombre: "Crédito", total: creditoGenerado, icono: BadgeDollarSign },
                             ].map((item) => {
                                 const Icono = item.icono;
-                                const base = ventasBrutas > 0 ? ventasBrutas : ingresosCobrados;
+                                const base = ingresosCobrados;
 
                                 return (
                                     <div key={item.nombre} className="mb-4 last:mb-0">

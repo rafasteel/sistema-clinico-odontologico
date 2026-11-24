@@ -1,5 +1,7 @@
 "use client";
 
+import { resumirVentas, esAbonoVenta } from "@/lib/resumenFinanciero";
+
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
@@ -768,7 +770,9 @@ export default function CajaPage() {
         if (venta.estado === "Anulada") return;
 
         const confirmar = window.confirm(
-            "¿Seguro que deseas anular esta venta? Si tenía crédito, también se anulará la cuenta por cobrar relacionada."
+            esAbonoVenta(venta)
+                ? "¿Anular este abono? El monto volverá al saldo pendiente de la cuenta."
+                : "¿Anular esta venta? Primero deben anularse sus abonos activos; la cuenta y el stock se actualizarán juntos."
         );
 
         if (!confirmar) return;
@@ -820,7 +824,7 @@ export default function CajaPage() {
     );
 
     const totalCobradoHoy = efectivoHoy + tarjetaHoy + transferenciaHoy;
-    const totalBrutoHoy = totalCobradoHoy + creditoHoy;
+    const totalBrutoHoy = resumirVentas(ventasHoy).ventasBrutas;
     const comisionTarjetaHoy = ventasHoy.reduce((totalActual, venta) => {
         if (typeof venta.comisionTarjeta === "number") {
             return totalActual + venta.comisionTarjeta;

@@ -1,5 +1,7 @@
 "use client";
 
+import { resumirVentas } from "@/lib/resumenFinanciero";
+
 import Link from "next/link";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
@@ -869,10 +871,7 @@ export default function PerfilPacientePage() {
         0
     );
 
-    const totalFacturado = ventasActivasPaciente.reduce(
-        (total, venta) => total + (venta.total || 0),
-        0
-    );
+    const totalFacturado = resumirVentas(ventasActivasPaciente).ventasBrutas;
 
     const totalCobrado = ventasActivasPaciente.reduce(
         (total, venta) =>

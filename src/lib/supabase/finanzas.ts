@@ -264,6 +264,10 @@ export async function anularVentaSupabase(id: string) {
     return ejecutarOperacionClinica<VentaSupabase>("venta.anular", { id });
 }
 
+export async function anularAbonoCuentaSupabase(id: string) {
+    return ejecutarOperacionClinica<AbonoCuentaSupabase>("abono.anular", { id });
+}
+
 export async function listarCuentasCobrarSupabase() {
     const supabase = crearClienteSupabase();
     const { clinicaId } = await obtenerContextoClinica();

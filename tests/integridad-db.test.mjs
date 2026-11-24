@@ -13,12 +13,15 @@ before(async () => {
     await db.exec(sql("../supabase/migrations/20261124003536_fase_2_integridad_transacciones.sql"));
     await db.exec(sql("../supabase/migrations/20261124004018_fase_2_conflictos_version.sql"));
     await db.exec(sql("../supabase/migrations/20261124004329_fase_2_cita_cobro_unico.sql"));
+    await db.exec(sql("../supabase/migrations/20261124010453_fase_3_coherencia_financiera.sql"));
+    await db.exec(sql("../supabase/migrations/20261124011213_fase_3_validacion_solicitud.sql"));
 });
 after(async () => { await db?.close(); });
 beforeEach(async () => {
     f = Object.fromEntries(["clinica", "otra", "auth", "perfil", "paciente", "pacienteAjeno", "producto", "proveedor", "pos"]
         .map((key) => [key, randomUUID()]));
     await db.exec("begin");
+    f.hoy = (await db.query("select (statement_timestamp() at time zone 'America/Guatemala')::date::text as hoy")).rows[0].hoy;
     await db.query("insert into public.clinicas(id,nombre,fecha_vencimiento) values ($1,'Prueba','2099-01-01'),($2,'Otra','2099-01-01')", [f.clinica, f.otra]);
     await db.query("insert into auth.users(id,email) values ($1,'prueba@example.invalid')", [f.auth]);
     await db.query("insert into public.usuarios_perfiles(id,auth_user_id,clinica_id,nombre,usuario,correo,rol) values($1,$2,$3,'Admin prueba','prueba','prueba@example.invalid','ADMIN')", [f.perfil,f.auth,f.clinica]);
@@ -265,4 +268,130 @@ test("Una cita parcialmente cobrada tampoco duplica su crédito", async () => {
     await rpc("venta.registrar",d);
     await assert.rejects(rpc("venta.registrar",d),{code:"22023"});
     assert.equal(await count("public.ventas"),1); assert.equal(await count("public.cuentas_cobrar"),1);
+});
+
+// Fase 3: la misma base y las mismas operaciones, con reglas de coherencia.
+const cerrar = (extras={}) => rpc("cierre.crear",{fecha:f.hoy,efectivo_contado:0,tarjeta_reportada:0,transferencia_reportada:0,...extras});
+const resumenCaja = async(fecha=f.hoy) => (await db.query("select public.obtener_resumen_caja($1) as r",[fecha])).rows[0].r;
+const gastoManual = (extras={}) => ({fecha:f.hoy,categoria:"Prueba",descripcion:"Gasto manual",monto:10,metodo_pago:"Efectivo",...extras});
+
+test("Anular comprobante de abono restituye deuda y conserva estado Anulado",async()=>{
+    const {cuenta}=await rpc("venta.registrar",venta());
+    const a=await rpc("abono.cobrar",{cuenta_id:cuenta.id,efectivo:60});
+    assert.equal(a.cuenta.estado,"Pagada");
+    await rpc("venta.anular",{id:a.venta.id});
+    const c=(await adminQuery("select * from public.cuentas_cobrar where id=$1",[cuenta.id])).rows[0];
+    assert.equal(Number(c.saldo),60);assert.equal(Number(c.abonado),40);assert.equal(c.estado,"Parcial");
+    assert.equal((await adminQuery("select estado from public.abonos_cuentas_cobrar where id=$1",[a.abono.id])).rows[0].estado,"Anulado");
+    await rpc("venta.anular",{id:a.venta.id});
+    assert.equal(Number((await adminQuery("select saldo from public.cuentas_cobrar where id=$1",[cuenta.id])).rows[0].saldo),60);
+});
+test("Anular por ID de abono también anula comprobante y es idempotente",async()=>{
+    const {cuenta}=await rpc("venta.registrar",venta());const a=await rpc("abono.cobrar",{cuenta_id:cuenta.id,efectivo:10});
+    const id=randomUUID();const d={id:a.abono.id};
+    const r=await rpc("abono.anular",d,id);assert.equal(r.estado,"Anulado");assert.deepEqual(await rpc("abono.anular",d,id),r);
+    assert.equal((await adminQuery("select estado from public.ventas where id=$1",[a.venta.id])).rows[0].estado,"Anulada");
+});
+test("No se anula la venta original ni su cuenta con abonos activos",async()=>{
+    const v=await rpc("venta.registrar",venta());const a=await rpc("abono.cobrar",{cuenta_id:v.cuenta.id,efectivo:10});
+    await assert.rejects(rpc("venta.anular",{id:v.venta.id}),{code:"22023"});
+    await assert.rejects(rpc("cuenta.anular",{id:v.cuenta.id}),{code:"22023"});
+    await rpc("abono.anular",{id:a.abono.id});await rpc("cuenta.anular",{id:v.cuenta.id});
+    assert.equal((await adminQuery("select estado from public.ventas where id=$1",[v.venta.id])).rows[0].estado,"Anulada");
+});
+test("Venta 100 y abono 40 siguen siendo 100 vendidos; se cobran ambos pagos",async()=>{
+    const v=await rpc("venta.registrar",venta());await rpc("abono.cobrar",{cuenta_id:v.cuenta.id,efectivo:40});
+    const r=await resumenCaja();assert.equal(r.ventas_brutas,100);assert.equal(r.abonos_cobrados,40);assert.equal(r.total_cobrado,80);
+    assert.equal(r.ventas_cantidad,1);assert.equal(r.cobros_cantidad,2);assert.equal(r.credito_generado,60);
+});
+test("Cierre se calcula en servidor e ignora totales y estado falsificados",async()=>{
+    await rpc("venta.registrar",venta());
+    const c=await cerrar({efectivo_contado:40,ventas_brutas:999,efectivo_sistema:999,estado:"Con diferencia"});
+    assert.equal(c.ventas_brutas,100);assert.equal(c.efectivo_sistema,40);assert.equal(c.estado,"Cuadrado");assert.equal(c.resumen_version,2);
+});
+test("Cierre diferencia cada medio de pago, aunque las diferencias se compensen",async()=>{
+    await rpc("venta.registrar",venta({efectivo:50,transferencia:50,credito:0}));
+    const c=await cerrar({efectivo_contado:60,transferencia_reportada:40});
+    assert.equal(c.diferencia_efectivo,10);assert.equal(c.diferencia_transferencia,-10);assert.equal(c.estado,"Con diferencia");
+});
+test("Huella desactualizada no permite cerrar con un resumen viejo",async()=>{
+    const r=await resumenCaja();await rpc("venta.registrar",venta());
+    await assert.rejects(cerrar({resumen_esperado:r.huella}),{code:"PT409"});assert.equal(await count("public.cierres_caja"),0);
+});
+test("Cierre repetido con la misma solicitud devuelve la instantánea; otro ID no duplica",async()=>{
+    const id=randomUUID(),d={fecha:f.hoy,efectivo_contado:0,tarjeta_reportada:0,transferencia_reportada:0};
+    const c=await rpc("cierre.crear",d,id);assert.deepEqual(await rpc("cierre.crear",d,id),c);
+    await assert.rejects(rpc("cierre.crear",d),{code:"PT409"});assert.equal(await count("public.cierres_caja"),1);
+});
+test("No se crean ni anulan ventas o abonos en una fecha cerrada",async()=>{
+    const v=await rpc("venta.registrar",venta());const a=await rpc("abono.cobrar",{cuenta_id:v.cuenta.id,efectivo:10});
+    await cerrar();
+    await assert.rejects(rpc("venta.registrar",venta()),{code:"PT409"});
+    await assert.rejects(rpc("venta.anular",{id:a.venta.id}),{code:"PT409"});
+    await assert.rejects(rpc("abono.cobrar",{cuenta_id:v.cuenta.id,efectivo:10}),{code:"PT409"});
+    assert.equal(Number((await adminQuery("select saldo from public.cuentas_cobrar where id=$1",[v.cuenta.id])).rows[0].saldo),50);
+});
+test("Un abono nuevo puede cobrar una deuda de una fecha anterior ya cerrada",async()=>{
+    const v=await rpc("venta.registrar",venta({fecha:"2020-01-01",efectivo:0,credito:100}));
+    await cerrar({fecha:"2020-01-01"});
+    const a=await rpc("abono.cobrar",{cuenta_id:v.cuenta.id,efectivo:20});assert.equal(a.cuenta.saldo,80);
+    await rpc("abono.anular",{id:a.abono.id});assert.equal(Number((await adminQuery("select saldo from public.cuentas_cobrar where id=$1",[v.cuenta.id])).rows[0].saldo),100);
+    await assert.rejects(rpc("venta.anular",{id:v.venta.id}),{code:"PT409"});
+});
+test("Gasto no puede moverse desde o hacia una fecha cerrada",async()=>{
+    const viejo=await rpc("gasto.crear",gastoManual({fecha:"2020-01-01"}));const actual=await rpc("gasto.crear",gastoManual());
+    await cerrar({fecha:"2020-01-01"});
+    await assert.rejects(rpc("gasto.actualizar",{...gastoManual(),id:viejo.id}),{code:"PT409"});
+    await assert.rejects(rpc("gasto.actualizar",{...gastoManual({fecha:"2020-01-01"}),id:actual.id}),{code:"PT409"});
+    await assert.rejects(rpc("gasto.anular",{id:viejo.id}),{code:"PT409"});
+});
+test("Compra a crédito y anulación de compra respetan el período cerrado",async()=>{
+    const c=await rpc("compra.registrar",compra());await cerrar();
+    await assert.rejects(rpc("compra.anular",{id:c.id}),{code:"PT409"});
+    await assert.rejects(rpc("compra.registrar",compra({pago_ahora:0})),{code:"PT409"});
+    assert.equal(Number((await adminQuery("select stock from public.productos_inventario where id=$1",[f.producto])).rows[0].stock),13);
+});
+test("Solo ADMIN reabre con motivo y conserva instantánea al volver a cerrar",async()=>{
+    await rpc("venta.registrar",venta());const c=await cerrar({efectivo_contado:40});
+    await assert.rejects(rpc("cierre.reabrir",{id:c.id,motivo:""}),{code:"22023"});
+    await adminQuery("update public.usuarios_perfiles set rol='CAJA' where id=$1",[f.perfil]);
+    await assert.rejects(rpc("cierre.reabrir",{id:c.id,motivo:"Corregir"}),{code:"42501"});
+    await adminQuery("update public.usuarios_perfiles set rol='ADMIN' where id=$1",[f.perfil]);
+    const anterior=await rpc("cierre.reabrir",{id:c.id,motivo:"Corrección autorizada"});
+    assert.equal(anterior.ventas_brutas,c.ventas_brutas);assert.equal(anterior.motivo_reapertura,"Corrección autorizada");
+    await rpc("venta.registrar",venta({total:10,efectivo:10,credito:0}));
+    const nuevo=await cerrar({efectivo_contado:50});assert.notEqual(c.id,nuevo.id);assert.equal(nuevo.ventas_brutas,110);
+    assert.equal(await count("public.cierres_caja"),2);assert.equal(await count("public.auditoria"),3);
+});
+test("No se altera ni elimina una instantánea de cierre con SQL privilegiado",async()=>{
+    const c=await cerrar();
+    for(const query of ["update public.cierres_caja set ventas_brutas=999 where id=$1","delete from public.cierres_caja where id=$1"]){
+        await db.exec("reset role; savepoint proteger");
+        await assert.rejects(db.query(query,[c.id]),{code:"42501"});
+        await db.exec("rollback to savepoint proteger; release savepoint proteger; set local role authenticated");
+    }
+});
+test("Gasto vinculado a una compra no se anula manualmente",async()=>{
+    const c=await rpc("compra.registrar",compra());await assert.rejects(rpc("gasto.anular",{id:c.gasto_id}),{code:"22023"});
+});
+test("Fallo posterior a revertir saldo no deja una anulación parcial",async()=>{
+    const v=await rpc("venta.registrar",venta());const a=await rpc("abono.cobrar",{cuenta_id:v.cuenta.id,efectivo:10});
+    await adminQuery("create function pg_temp.fallar_anulacion() returns trigger language plpgsql as $$ begin raise exception 'Falla de comprobante'; end; $$");
+    await adminQuery("create trigger falla_prueba before update on public.ventas for each row execute function pg_temp.fallar_anulacion()");
+    await assert.rejects(rpc("abono.anular",{id:a.abono.id}),/Falla de comprobante/);
+    assert.equal(Number((await adminQuery("select saldo from public.cuentas_cobrar where id=$1",[v.cuenta.id])).rows[0].saldo),50);
+    assert.equal((await adminQuery("select estado from public.abonos_cuentas_cobrar where id=$1",[a.abono.id])).rows[0].estado,"Activo");
+});
+test("Una operación nula no permite saltarse el rol al recuperar una solicitud",async()=>{
+    const id=randomUUID(),d=venta();await rpc("venta.registrar",d,id);
+    await adminQuery("update public.usuarios_perfiles set rol='DOCTOR' where id=$1",[f.perfil]);
+    await assert.rejects(rpc(null,d,id),{code:"42501"});
+    await assert.rejects(rpc("venta.registrar",d,id),{code:"42501"});
+});
+test("Revertir un abono de una deuda vencida restituye el estado Vencida",async()=>{
+    const v=await rpc("venta.registrar",venta({fecha:"2020-01-01",efectivo:0,credito:100,fecha_vencimiento_credito:"2020-02-01"}));
+    const a=await rpc("abono.cobrar",{cuenta_id:v.cuenta.id,efectivo:100});
+    await rpc("abono.anular",{id:a.abono.id});
+    const c=(await adminQuery("select estado,saldo from public.cuentas_cobrar where id=$1",[v.cuenta.id])).rows[0];
+    assert.equal(c.estado,"Vencida");assert.equal(Number(c.saldo),100);
 });

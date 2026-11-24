@@ -1,5 +1,7 @@
 "use client";
 
+import { resumirVentas } from "@/lib/resumenFinanciero";
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -992,10 +994,7 @@ export default function BusquedaGlobalPage() {
     const totalPacientes = pacientes.length;
     const totalEventosClinicos =
         notas.length + tratamientos.length + recetas.length + citas.length;
-    const totalFinanciero = ventas.reduce(
-        (total, venta) => total + (venta.total || 0),
-        0
-    );
+    const totalFinanciero = resumirVentas(ventas).ventasBrutas;
     const totalPendiente = cuentas
         .filter(
             (cuenta) =>

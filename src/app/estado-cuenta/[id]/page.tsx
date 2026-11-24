@@ -56,6 +56,7 @@ type AbonoCuenta = {
     metodo: MetodoPago;
     observaciones?: string;
     usuarioNombre?: string;
+    estado: string;
 };
 
 type CuentaPorCobrar = {
@@ -180,6 +181,7 @@ function convertirAbono(abono: AbonoCuentaSupabase): AbonoCuenta {
         metodo: metodoPago(abono.metodo),
         observaciones: abono.observaciones || "",
         usuarioNombre: abono.usuario_nombre || "",
+        estado: abono.estado,
     };
 }
 
@@ -760,7 +762,7 @@ export default function EstadoCuentaPacientePage() {
                                             </td>
 
                                             <td className="border-b border-r border-slate-300 px-2 py-2 print-border">
-                                                {abono.metodo}
+                                                {abono.metodo} · {abono.estado}
                                             </td>
 
                                             <td className="border-b border-r border-slate-300 px-2 py-2 print-border">

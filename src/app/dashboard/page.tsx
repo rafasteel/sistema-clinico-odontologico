@@ -1,5 +1,7 @@
 "use client";
 
+import { resumirVentas } from "@/lib/resumenFinanciero";
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -502,10 +504,7 @@ export default function DashboardPage() {
         0
     );
 
-    const ventasBrutasMes = ventasMes.reduce(
-        (total, venta) => total + (venta.total || 0),
-        0
-    );
+    const ventasBrutasMes = resumirVentas(ventasMes).ventasBrutas;
 
     const ingresosMes = ventasMes.reduce(
         (total, venta) =>
@@ -531,10 +530,6 @@ export default function DashboardPage() {
         0
     );
 
-    const creditoMes = ventasMes.reduce(
-        (total, venta) => total + (venta.credito || 0),
-        0
-    );
 
     const gastosTotalHoy = gastosHoy.reduce(
         (total, gasto) => total + (gasto.monto || 0),
@@ -1153,11 +1148,10 @@ export default function DashboardPage() {
                                     total: transferenciaMes,
                                     icono: FileText,
                                 },
-                                { nombre: "Crédito", total: creditoMes, icono: BadgeDollarSign },
                             ].map((item) => {
                                 const Icono = item.icono;
                                 const porcentaje =
-                                    ventasBrutasMes > 0 ? (item.total / ventasBrutasMes) * 100 : 0;
+                                    ingresosMes > 0 ? (item.total / ingresosMes) * 100 : 0;
 
                                 return (
                                     <div key={item.nombre}>

@@ -1,6 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { resumirVentas } from "@/lib/resumenFinanciero";
+
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
     AlertTriangle,
     Banknote,
@@ -37,8 +39,10 @@ import {
     type MetodoGastoSupabase,
 } from "@/lib/supabase/gastos";
 import {
-    anularCierreCajaSupabase,
+    reabrirCierreCajaSupabase,
     crearCierreCajaSupabase,
+    obtenerResumenCajaSupabase,
+    type ResumenCajaSupabase,
     listarCierresCajaSupabase,
     type CierreCajaSupabase,
     type EstadoCierreCajaSupabase,
@@ -111,6 +115,10 @@ type CierreCaja = {
     diferenciaTransferencia: number;
     estado: EstadoCierreCajaSupabase;
     observaciones: string;
+    motivoReapertura: string;
+    resumenVersion: number;
+    totalCobrado: number | null;
+    abonosCobrados: number | null;
 };
 
 type FormularioCierre = {
@@ -236,6 +244,10 @@ function convertirCierre(cierre: CierreCajaSupabase): CierreCaja {
         diferenciaTransferencia: Number(cierre.diferencia_transferencia || 0),
         estado: cierre.estado || "Cuadrado",
         observaciones: cierre.observaciones || "",
+        motivoReapertura: cierre.motivo_reapertura || "",
+        resumenVersion: cierre.resumen_version ?? 1,
+        totalCobrado: cierre.total_cobrado,
+        abonosCobrados: cierre.abonos_cobrados,
     };
 }
 
@@ -249,12 +261,18 @@ export default function CierreCajaPage() {
     const [cierres, setCierres] = useState<CierreCaja[]>([]);
     const [fechaSeleccionada, setFechaSeleccionada] = useState(fechaHoyLocal());
     const [formulario, setFormulario] = useState<FormularioCierre>(formularioVacio);
+    const [resumenServidor, setResumenServidor] = useState<ResumenCajaSupabase | null>(null);
+    const [cierreImprimir, setCierreImprimir] = useState<CierreCaja | null>(null);
+    const [error, setError] = useState("");
+
+    const solicitudCargaRef = useRef(0);
+    const resumenActual = resumenServidor?.fecha === fechaSeleccionada ? resumenServidor : null;
     const [busqueda, setBusqueda] = useState("");
     const [cargando, setCargando] = useState(true);
     const [guardando, setGuardando] = useState(false);
-    const [error, setError] = useState("");
 
     async function cargarDatos() {
+        const solicitudActual = ++solicitudCargaRef.current;
         setCargando(true);
         setError("");
 
@@ -268,23 +286,26 @@ export default function CierreCajaPage() {
                 setConfiguracion(obtenerConfiguracionClinica());
             }
 
-            const [ventasSupabase, gastosSupabase, cierresSupabase] = await Promise.all([
+            const [ventasSupabase, gastosSupabase, cierresSupabase, resumenSupabase] = await Promise.all([
                 listarVentasSupabase(),
                 listarGastosSupabase(fechaSeleccionada.slice(0, 7)),
                 listarCierresCajaSupabase(),
+                obtenerResumenCajaSupabase(fechaSeleccionada),
             ]);
-
+            if (solicitudActual !== solicitudCargaRef.current) return;
+            setResumenServidor(resumenSupabase);
             setVentas(ventasSupabase.map(convertirVenta));
             setGastos(gastosSupabase.map(convertirGasto));
             setCierres(cierresSupabase.map(convertirCierre));
         } catch (errorActual) {
+            if (solicitudActual !== solicitudCargaRef.current) return;
             const mensaje =
                 errorActual instanceof Error
                     ? errorActual.message
                     : "No se pudo cargar el cierre de caja desde Supabase.";
             setError(mensaje);
         } finally {
-            setCargando(false);
+            if (solicitudActual === solicitudCargaRef.current) setCargando(false);
         }
     }
 
@@ -316,25 +337,25 @@ export default function CierreCajaPage() {
         (cierre) => cierre.fecha === fechaSeleccionada && cierre.estado !== "Anulado"
     );
 
-    const ventasBrutas = ventasDia.reduce((total, venta) => total + venta.total, 0);
-    const efectivoSistema = ventasDia.reduce((total, venta) => total + venta.efectivo, 0);
-    const tarjetaSistema = ventasDia.reduce((total, venta) => total + venta.tarjeta, 0);
-    const transferenciaSistema = ventasDia.reduce((total, venta) => total + venta.transferencia, 0);
-    const creditoGenerado = ventasDia.reduce((total, venta) => total + venta.credito, 0);
+    const ventasBrutas = resumenActual?.ventas_brutas ?? resumirVentas(ventasDia).ventasBrutas;
+    const efectivoSistema = resumenActual?.efectivo_sistema ?? (ventasDia.reduce((total, venta) => total + venta.efectivo, 0));
+    const tarjetaSistema = resumenActual?.tarjeta_sistema ?? (ventasDia.reduce((total, venta) => total + venta.tarjeta, 0));
+    const transferenciaSistema = resumenActual?.transferencia_sistema ?? (ventasDia.reduce((total, venta) => total + venta.transferencia, 0));
+    const creditoGenerado = resumenActual?.credito_generado ?? (ventasDia.reduce((total, venta) => total + venta.credito, 0));
 
-    const gastosEfectivo = gastosDia
+    const gastosEfectivo = resumenActual?.gastos_efectivo ?? (gastosDia
         .filter((gasto) => gasto.metodoPago === "Efectivo")
-        .reduce((total, gasto) => total + gasto.monto, 0);
-    const gastosTarjeta = gastosDia
+        .reduce((total, gasto) => total + gasto.monto, 0));
+    const gastosTarjeta = resumenActual?.gastos_tarjeta ?? (gastosDia
         .filter((gasto) => gasto.metodoPago === "Tarjeta")
-        .reduce((total, gasto) => total + gasto.monto, 0);
-    const gastosTransferencia = gastosDia
+        .reduce((total, gasto) => total + gasto.monto, 0));
+    const gastosTransferencia = resumenActual?.gastos_transferencia ?? (gastosDia
         .filter((gasto) => gasto.metodoPago === "Transferencia")
-        .reduce((total, gasto) => total + gasto.monto, 0);
-    const gastosTotal = gastosDia.reduce((total, gasto) => total + gasto.monto, 0);
+        .reduce((total, gasto) => total + gasto.monto, 0));
+    const gastosTotal = resumenActual?.gastos_total ?? (gastosDia.reduce((total, gasto) => total + gasto.monto, 0));
 
-    const comisionPOS = ventasDia.reduce((total, venta) => total + venta.comisionTarjeta, 0);
-    const netoTarjeta = ventasDia.reduce((total, venta) => total + venta.netoTarjeta, 0);
+    const comisionPOS = resumenActual?.comision_pos ?? (ventasDia.reduce((total, venta) => total + venta.comisionTarjeta, 0));
+    const netoTarjeta = resumenActual?.neto_tarjeta ?? (ventasDia.reduce((total, venta) => total + venta.netoTarjeta, 0));
 
     const efectivoEsperado = efectivoSistema - gastosEfectivo;
     const tarjetaEsperada = tarjetaSistema - gastosTarjeta;
@@ -368,6 +389,8 @@ export default function CierreCajaPage() {
     async function registrarCierre(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
 
+        if (cargando || !resumenActual) { alert("Esperá a que se actualice el resumen del día."); return; }
+
         if (cierreExistente) {
             alert("Ya existe un cierre registrado para esta fecha.");
             return;
@@ -380,42 +403,17 @@ export default function CierreCajaPage() {
             if (!confirmar) return;
         }
 
-        const estado: EstadoCierreCajaSupabase =
-            Math.abs(diferenciaEfectivo) < 0.01 &&
-                Math.abs(diferenciaTarjeta) < 0.01 &&
-                Math.abs(diferenciaTransferencia) < 0.01
-                ? "Cuadrado"
-                : "Con diferencia";
 
         setGuardando(true);
 
         try {
             await crearCierreCajaSupabase({
                 fecha: fechaSeleccionada,
-                usuario_nombre: usuario?.nombre || "Usuario no identificado",
-                ventas_cantidad: ventasDia.length,
-                ventas_brutas: ventasBrutas,
-                efectivo_sistema: efectivoSistema,
-                tarjeta_sistema: tarjetaSistema,
-                transferencia_sistema: transferenciaSistema,
-                credito_generado: creditoGenerado,
-                gastos_efectivo: gastosEfectivo,
-                gastos_tarjeta: gastosTarjeta,
-                gastos_transferencia: gastosTransferencia,
-                gastos_total: gastosTotal,
-                comision_pos: comisionPOS,
-                neto_tarjeta: netoTarjeta,
-                efectivo_esperado: efectivoEsperado,
                 efectivo_contado: efectivoContado,
-                tarjeta_esperada: tarjetaEsperada,
                 tarjeta_reportada: tarjetaReportada,
-                transferencia_esperada: transferenciaEsperada,
                 transferencia_reportada: transferenciaReportada,
-                diferencia_efectivo: diferenciaEfectivo,
-                diferencia_tarjeta: diferenciaTarjeta,
-                diferencia_transferencia: diferenciaTransferencia,
-                estado,
                 observaciones: formulario.observaciones.trim(),
+                resumen_esperado: resumenActual.huella,
             });
 
             limpiarFormulario();
@@ -426,6 +424,8 @@ export default function CierreCajaPage() {
                 errorActual instanceof Error
                     ? errorActual.message
                     : "No se pudo registrar el cierre.";
+            try { setResumenServidor(await obtenerResumenCajaSupabase(fechaSeleccionada)); }
+            catch { setResumenServidor(null); }
             alert(mensaje);
         } finally {
             setGuardando(false);
@@ -434,15 +434,17 @@ export default function CierreCajaPage() {
 
     async function eliminarCierre(cierre: CierreCaja) {
         const confirmar = window.confirm(
-            "¿Seguro que deseas anular este cierre? Esto permitirá registrar otro cierre para esa fecha."
+            "¿Reabrir esta fecha? El cierre anterior se conservará y un nuevo cierre tendrá su propia instantánea."
         );
         if (!confirmar) return;
 
         setGuardando(true);
         try {
-            await anularCierreCajaSupabase(cierre.id);
+            const motivo = window.prompt("Motivo obligatorio de la reapertura:");
+            if (!motivo?.trim()) return;
+            await reabrirCierreCajaSupabase(cierre.id, motivo.trim());
             await cargarDatos();
-            alert("Cierre anulado correctamente.");
+            alert("Fecha reabierta. El cierre anterior se conserva en el historial.");
         } catch (errorActual) {
             const mensaje =
                 errorActual instanceof Error
@@ -459,8 +461,11 @@ export default function CierreCajaPage() {
             alert("Primero registra el cierre para imprimirlo.");
             return;
         }
-        window.print();
+        setCierreImprimir(cierre || cierreExistente || null);
+        requestAnimationFrame(() => window.print());
     }
+
+    const cierreParaImprimir = cierreImprimir || cierreExistente;
 
     const cierresFiltrados = cierres.filter((cierre) => {
         const texto = normalizarTexto(busqueda);
@@ -665,9 +670,11 @@ export default function CierreCajaPage() {
                         </div>
                         <div className="p-6">
                             <div className="grid gap-3 md:grid-cols-2">
-                                <ResumenItem titulo="Efectivo ventas" valor={efectivoSistema} color="emerald" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Ventas nuevas (sin abonos)" valor={ventasBrutas} color="slate" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Abonos cobrados" valor={resumenActual?.abonos_cobrados ?? resumirVentas(ventasDia).abonosCobrados} color="emerald" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Efectivo cobrado" valor={efectivoSistema} color="emerald" simbolo={configuracion.simboloMoneda} />
                                 <ResumenItem titulo="Gastos efectivo" valor={gastosEfectivo} color="red" simbolo={configuracion.simboloMoneda} />
-                                <ResumenItem titulo="Tarjeta ventas" valor={tarjetaSistema} color="blue" simbolo={configuracion.simboloMoneda} />
+                                <ResumenItem titulo="Tarjeta cobrada" valor={tarjetaSistema} color="blue" simbolo={configuracion.simboloMoneda} />
                                 <ResumenItem titulo="Neto tarjeta" valor={netoTarjeta} color="slate" simbolo={configuracion.simboloMoneda} />
                                 <ResumenItem titulo="Transferencias" valor={transferenciaSistema} color="indigo" simbolo={configuracion.simboloMoneda} />
                                 <ResumenItem titulo="Crédito generado" valor={creditoGenerado} color="amber" simbolo={configuracion.simboloMoneda} />
@@ -720,7 +727,7 @@ export default function CierreCajaPage() {
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                         <div>
                             <h3 className="text-[16px] font-bold text-slate-800">Historial de cierres</h3>
-                            <p className="mono mt-0.5 text-[10px] text-slate-400">Cierres registrados, cuadrados o con diferencias</p>
+            <p className="mono mt-0.5 text-[10px] text-slate-400">Instantáneas de cierres, incluidos los reabiertos</p>
                         </div>
                         <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 md:w-80">
                             <Search className="h-4 w-4 text-slate-400" />
@@ -750,11 +757,11 @@ export default function CierreCajaPage() {
                                         <td className="px-4 py-4 text-[12px] text-slate-500">{formatoMoneda(cierre.tarjetaReportada, configuracion.simboloMoneda)}</td>
                                         <td className="px-4 py-4 text-[12px] text-slate-500">{formatoMoneda(cierre.transferenciaReportada, configuracion.simboloMoneda)}</td>
                                         <td className={`px-4 py-4 text-[12px] font-black ${colorDiferencia(diferencia)}`}>{formatoMoneda(diferencia, configuracion.simboloMoneda)}</td>
-                                        <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${cierre.estado === "Cuadrado" ? "bg-emerald-50 text-emerald-700" : cierre.estado === "Anulado" ? "bg-slate-100 text-slate-500" : "bg-amber-50 text-amber-700"}`}>{cierre.estado}</span></td>
+                                        <td className="px-4 py-4"><span className={`rounded-full px-2.5 py-1 text-[10px] font-bold ${cierre.estado === "Cuadrado" ? "bg-emerald-50 text-emerald-700" : cierre.estado === "Anulado" ? "bg-slate-100 text-slate-500" : "bg-amber-50 text-amber-700"}`}>{cierre.estado === "Anulado" ? "Reabierto" : cierre.estado}</span>{cierre.motivoReapertura && <p className="mt-1 text-xs text-slate-500">{cierre.motivoReapertura}</p>}</td>
                                         <td className="px-4 py-4">
                                             <div className="flex flex-wrap gap-2">
                                                 <button onClick={() => imprimirCierre(cierre)} className="flex items-center gap-1.5 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-700 hover:bg-blue-100"><Printer className="h-3.5 w-3.5" />Imprimir</button>
-                                                {cierre.estado !== "Anulado" && <button onClick={() => eliminarCierre(cierre)} disabled={guardando} className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100 disabled:opacity-60"><Trash2 className="h-3.5 w-3.5" />Anular</button>}
+                                                {cierre.estado !== "Anulado" && usuario?.rol === "ADMIN" && <button onClick={() => eliminarCierre(cierre)} disabled={guardando} className="flex items-center gap-1.5 rounded-xl bg-red-50 px-3 py-2 text-[11px] font-bold text-red-700 hover:bg-red-100 disabled:opacity-60"><Trash2 className="h-3.5 w-3.5" />Reabrir</button>}
                                             </div>
                                         </td>
                                     </tr>
@@ -767,27 +774,29 @@ export default function CierreCajaPage() {
             </section>
 
             <section className="hidden print:block bg-white p-8 text-slate-900">
-                <h1 className="text-2xl font-black">Cierre de caja - {fechaSeleccionada}</h1>
-                <p className="mt-1 text-sm">{configuracion.nombreClinica} · Generado por {usuario?.nombre || "Usuario no identificado"}</p>
+                <h1 className="text-2xl font-black">Cierre de caja - {cierreParaImprimir?.fecha}</h1>
+                <p className="mt-1 text-sm">{configuracion.nombreClinica} · Registrado por {cierreParaImprimir?.usuarioNombre}</p>
+                <p>Estado: {cierreParaImprimir?.estado}</p>
+                {cierreParaImprimir?.resumenVersion === 1 && <p>Cierre histórico anterior a la separación de ventas y abonos.</p>}
                 <div className="mt-8 grid grid-cols-2 gap-4">
                     <div>
-                        <p>Ventas activas: {ventasDia.length}</p>
-                        <p>Ventas brutas: {formatoMoneda(ventasBrutas, configuracion.simboloMoneda)}</p>
-                        <p>Efectivo sistema: {formatoMoneda(efectivoSistema, configuracion.simboloMoneda)}</p>
-                        <p>Tarjeta sistema: {formatoMoneda(tarjetaSistema, configuracion.simboloMoneda)}</p>
-                        <p>Transferencia sistema: {formatoMoneda(transferenciaSistema, configuracion.simboloMoneda)}</p>
+                        <p>Ventas: {cierreParaImprimir?.ventasCantidad}</p>
+                        <p>Ventas brutas: {formatoMoneda(cierreParaImprimir?.ventasBrutas ?? 0, configuracion.simboloMoneda)}</p>
+                        <p>Total cobrado: {formatoMoneda(cierreParaImprimir?.totalCobrado ?? ((cierreParaImprimir?.efectivoSistema ?? 0) + (cierreParaImprimir?.tarjetaSistema ?? 0) + (cierreParaImprimir?.transferenciaSistema ?? 0)), configuracion.simboloMoneda)}</p>
+                        <p>Abonos cobrados: {cierreParaImprimir?.abonosCobrados == null ? "No desglosados en este cierre histórico" : formatoMoneda(cierreParaImprimir.abonosCobrados, configuracion.simboloMoneda)}</p>
                     </div>
                     <div>
-                        <p>Gastos total: {formatoMoneda(gastosTotal, configuracion.simboloMoneda)}</p>
-                        <p>Crédito generado: {formatoMoneda(creditoGenerado, configuracion.simboloMoneda)}</p>
-                        <p>Comisión POS: {formatoMoneda(comisionPOS, configuracion.simboloMoneda)}</p>
-                        <p>Neto tarjeta: {formatoMoneda(netoTarjeta, configuracion.simboloMoneda)}</p>
+                        <p>Gastos total: {formatoMoneda(cierreParaImprimir?.gastosTotal ?? 0, configuracion.simboloMoneda)}</p>
+                        <p>Crédito generado: {formatoMoneda(cierreParaImprimir?.creditoGenerado ?? 0, configuracion.simboloMoneda)}</p>
+                        <p>Comisión POS: {formatoMoneda(cierreParaImprimir?.comisionPOS ?? 0, configuracion.simboloMoneda)}</p>
+                        <p>Neto tarjeta: {formatoMoneda(cierreParaImprimir?.netoTarjeta ?? 0, configuracion.simboloMoneda)}</p>
                     </div>
                 </div>
                 <div className="mt-8 border-t pt-6">
-                    <p>Efectivo esperado: {formatoMoneda(efectivoEsperado, configuracion.simboloMoneda)}</p>
-                    <p>Efectivo contado: {formatoMoneda(cierreExistente?.efectivoContado || efectivoContado, configuracion.simboloMoneda)}</p>
-                    <p>Diferencia efectivo: {formatoMoneda(cierreExistente?.diferenciaEfectivo || diferenciaEfectivo, configuracion.simboloMoneda)}</p>
+                    <p>Efectivo esperado / contado / diferencia: {formatoMoneda(cierreParaImprimir?.efectivoEsperado ?? 0, configuracion.simboloMoneda)} / {formatoMoneda(cierreParaImprimir?.efectivoContado ?? 0, configuracion.simboloMoneda)} / {formatoMoneda(cierreParaImprimir?.diferenciaEfectivo ?? 0, configuracion.simboloMoneda)}</p>
+                    <p>Tarjeta esperada / reportada / diferencia: {formatoMoneda(cierreParaImprimir?.tarjetaEsperada ?? 0, configuracion.simboloMoneda)} / {formatoMoneda(cierreParaImprimir?.tarjetaReportada ?? 0, configuracion.simboloMoneda)} / {formatoMoneda(cierreParaImprimir?.diferenciaTarjeta ?? 0, configuracion.simboloMoneda)}</p>
+                    <p>Transferencia esperada / reportada / diferencia: {formatoMoneda(cierreParaImprimir?.transferenciaEsperada ?? 0, configuracion.simboloMoneda)} / {formatoMoneda(cierreParaImprimir?.transferenciaReportada ?? 0, configuracion.simboloMoneda)} / {formatoMoneda(cierreParaImprimir?.diferenciaTransferencia ?? 0, configuracion.simboloMoneda)}</p>
+                    {cierreParaImprimir?.motivoReapertura && <p>Motivo de reapertura: {cierreParaImprimir.motivoReapertura}</p>}
                 </div>
             </section>
         </AppShell>

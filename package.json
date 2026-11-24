@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test:seguridad": "node --test tests/seguridad-api.test.mjs",
-    "test:integridad": "node --test tests/integridad-db.test.mjs tests/operaciones.test.mjs"
+    "test:integridad": "node --test tests/integridad-db.test.mjs tests/operaciones.test.mjs tests/resumen-financiero.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.3",

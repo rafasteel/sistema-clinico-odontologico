@@ -1,5 +1,6 @@
 import { crearClienteSupabase } from "@/lib/supabase/client";
 import { obtenerPerfilActual } from "@/lib/supabase/perfil";
+import { ejecutarOperacionClinica } from "@/lib/supabase/operaciones";
 
 export type EstadoCierreCajaSupabase = "Cuadrado" | "Con diferencia" | "Anulado";
 
@@ -35,49 +36,35 @@ export type CierreCajaSupabase = {
     creado_por: string | null;
     creado_en: string;
     actualizado_en: string;
+    cobros_cantidad: number | null;
+    abonos_cobrados: number | null;
+    total_cobrado: number | null;
+    resumen_version: number;
+    motivo_reapertura: string | null;
+    reabierto_por: string | null;
+    reabierto_en: string | null;
 };
 
 export type FormularioCierreCajaSupabase = {
     fecha: string;
-    usuario_nombre?: string;
-    ventas_cantidad: number | string;
-    ventas_brutas: number | string;
-    efectivo_sistema: number | string;
-    tarjeta_sistema: number | string;
-    transferencia_sistema: number | string;
-    credito_generado: number | string;
-    gastos_efectivo: number | string;
-    gastos_tarjeta: number | string;
-    gastos_transferencia: number | string;
-    gastos_total: number | string;
-    comision_pos: number | string;
-    neto_tarjeta: number | string;
-    efectivo_esperado: number | string;
     efectivo_contado: number | string;
-    tarjeta_esperada: number | string;
     tarjeta_reportada: number | string;
-    transferencia_esperada: number | string;
     transferencia_reportada: number | string;
-    diferencia_efectivo: number | string;
-    diferencia_tarjeta: number | string;
-    diferencia_transferencia: number | string;
-    estado: EstadoCierreCajaSupabase;
     observaciones?: string;
+    resumen_esperado?: string;
 };
 
-function texto(valor: unknown) {
-    return String(valor || "").trim();
-}
+export type ResumenCajaSupabase = Pick<CierreCajaSupabase,
+    "fecha" | "ventas_cantidad" | "ventas_brutas" | "efectivo_sistema" | "tarjeta_sistema" |
+    "transferencia_sistema" | "credito_generado" | "gastos_efectivo" | "gastos_tarjeta" |
+    "gastos_transferencia" | "gastos_total" | "comision_pos" | "neto_tarjeta" |
+    "efectivo_esperado" | "tarjeta_esperada" | "transferencia_esperada"
+> & { cobros_cantidad: number; abonos_cobrados: number; total_cobrado: number; huella: string };
 
-function numero(valor: unknown) {
-    const convertido = Number(valor || 0);
-    if (Number.isNaN(convertido)) return 0;
-    return convertido;
-}
-
-function horaActualLocal() {
-    const fecha = new Date();
-    return `${String(fecha.getHours()).padStart(2, "0")}:${String(fecha.getMinutes()).padStart(2, "0")}`;
+export async function obtenerResumenCajaSupabase(fecha: string): Promise<ResumenCajaSupabase> {
+    const { data, error } = await crearClienteSupabase().rpc("obtener_resumen_caja", { p_fecha: fecha });
+    if (error || !data) throw new Error(error?.message || "No se pudo consultar el resumen de caja.");
+    return data as ResumenCajaSupabase;
 }
 
 async function obtenerContextoClinica() {
@@ -113,6 +100,7 @@ export async function obtenerCierreCajaPorFechaSupabase(fecha: string) {
         .select("*")
         .eq("clinica_id", clinicaId)
         .eq("fecha", fecha)
+        .neq("estado", "Anulado")
         .maybeSingle();
 
     if (error) throw new Error(error.message);
@@ -120,68 +108,9 @@ export async function obtenerCierreCajaPorFechaSupabase(fecha: string) {
 }
 
 export async function crearCierreCajaSupabase(formulario: FormularioCierreCajaSupabase) {
-    const supabase = crearClienteSupabase();
-    const { perfil, clinicaId } = await obtenerContextoClinica();
-
-    const fecha = texto(formulario.fecha);
-    if (!fecha) throw new Error("La fecha del cierre es obligatoria.");
-
-    const existente = await obtenerCierreCajaPorFechaSupabase(fecha);
-    if (existente && existente.estado !== "Anulado") {
-        throw new Error("Ya existe un cierre registrado para esta fecha.");
-    }
-
-    const { data, error } = await supabase
-        .from("cierres_caja")
-        .insert({
-            clinica_id: clinicaId,
-            fecha,
-            hora: horaActualLocal(),
-            usuario_nombre: texto(formulario.usuario_nombre) || perfil.nombre || "Usuario no identificado",
-            ventas_cantidad: Math.max(0, Math.round(numero(formulario.ventas_cantidad))),
-            ventas_brutas: numero(formulario.ventas_brutas),
-            efectivo_sistema: numero(formulario.efectivo_sistema),
-            tarjeta_sistema: numero(formulario.tarjeta_sistema),
-            transferencia_sistema: numero(formulario.transferencia_sistema),
-            credito_generado: numero(formulario.credito_generado),
-            gastos_efectivo: numero(formulario.gastos_efectivo),
-            gastos_tarjeta: numero(formulario.gastos_tarjeta),
-            gastos_transferencia: numero(formulario.gastos_transferencia),
-            gastos_total: numero(formulario.gastos_total),
-            comision_pos: numero(formulario.comision_pos),
-            neto_tarjeta: numero(formulario.neto_tarjeta),
-            efectivo_esperado: numero(formulario.efectivo_esperado),
-            efectivo_contado: numero(formulario.efectivo_contado),
-            tarjeta_esperada: numero(formulario.tarjeta_esperada),
-            tarjeta_reportada: numero(formulario.tarjeta_reportada),
-            transferencia_esperada: numero(formulario.transferencia_esperada),
-            transferencia_reportada: numero(formulario.transferencia_reportada),
-            diferencia_efectivo: numero(formulario.diferencia_efectivo),
-            diferencia_tarjeta: numero(formulario.diferencia_tarjeta),
-            diferencia_transferencia: numero(formulario.diferencia_transferencia),
-            estado: formulario.estado,
-            observaciones: texto(formulario.observaciones),
-            creado_por: perfil.id,
-        })
-        .select("*")
-        .single();
-
-    if (error) throw new Error(error.message);
-    return data as CierreCajaSupabase;
+    return ejecutarOperacionClinica<CierreCajaSupabase>("cierre.crear", formulario);
 }
 
-export async function anularCierreCajaSupabase(id: string) {
-    const supabase = crearClienteSupabase();
-    const { clinicaId } = await obtenerContextoClinica();
-
-    const { data, error } = await supabase
-        .from("cierres_caja")
-        .update({ estado: "Anulado" })
-        .eq("id", id)
-        .eq("clinica_id", clinicaId)
-        .select("*")
-        .single();
-
-    if (error) throw new Error(error.message);
-    return data as CierreCajaSupabase;
+export async function reabrirCierreCajaSupabase(id: string, motivo: string) {
+    return ejecutarOperacionClinica<CierreCajaSupabase>("cierre.reabrir", { id, motivo });
 }

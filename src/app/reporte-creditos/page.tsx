@@ -77,6 +77,7 @@ type CuentaPorCobrar = {
     pacienteNombre: string;
     concepto: string;
     total: number;
+    abonado: number;
     saldo: number;
     fecha: string;
     fechaVencimiento: string;
@@ -262,6 +263,7 @@ function convertirCuenta(
         pacienteNombre: cuenta.paciente_nombre || "",
         concepto: cuenta.concepto || "",
         total: Number(cuenta.total || 0),
+        abonado: Number(cuenta.abonado || 0),
         saldo: Number(cuenta.saldo || 0),
         fecha: cuenta.fecha,
         fechaVencimiento: cuenta.fecha_vencimiento || "",
@@ -387,10 +389,7 @@ export default function ReporteCreditosPage() {
         return cuentas.map((cuenta) => {
             const estadoVisual = obtenerEstadoVisual(cuenta);
             const abonos = cuenta.abonos || [];
-            const abonado = abonos.reduce(
-                (total, abono) => total + numero(abono.monto),
-                0
-            );
+            const abonado = numero(cuenta.abonado);
             const diasParaVencer = diferenciaDias(fechaHoyLocal(), cuenta.fechaVencimiento);
             const diasVencida =
                 estadoVisual === "Vencida" ? Math.abs(diasParaVencer) : 0;

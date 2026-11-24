@@ -48,3 +48,5 @@ La [fase 2 de integridad de datos](docs/auditoria-fase-2.md) incorpora transacci
 ```bash
 npm run test:integridad
 ```
+
+La [fase 3 de coherencia financiera](docs/auditoria-fase-3.md) incorpora reversión de abonos, separación de ventas y cobros, cierres calculados por el servidor y reapertura administrativa con historial.

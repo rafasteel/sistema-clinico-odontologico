@@ -1,5 +1,7 @@
 "use client";
 
+import { calcularSaldosAbono } from "@/lib/resumenFinanciero";
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
@@ -66,6 +68,8 @@ type AbonoCuenta = {
     netoTarjeta: number;
     observaciones: string;
     usuarioNombre: string;
+    estado: string;
+    creadoEn: string;
 };
 
 type CuentaPorCobrar = {
@@ -87,14 +91,6 @@ type AbonoEncontrado = {
     cuenta: CuentaPorCobrar;
     abonosCuenta: AbonoCuenta[];
 };
-
-function numero(valor: unknown) {
-    const convertido = Number(valor || 0);
-
-    if (Number.isNaN(convertido)) return 0;
-
-    return convertido;
-}
 
 function horaCorta(valor: string) {
     return String(valor || "").slice(0, 5);
@@ -164,6 +160,8 @@ function convertirCuenta(cuenta: CuentaCobrarSupabase): CuentaPorCobrar {
 function convertirAbono(abono: AbonoCuentaSupabase): AbonoCuenta {
     return {
         id: abono.id,
+        estado: abono.estado,
+        creadoEn: abono.creado_en,
         cuentaId: abono.cuenta_id,
         ventaId: abono.venta_id || "",
         pacienteId: abono.paciente_id || "",
@@ -183,12 +181,6 @@ function convertirAbono(abono: AbonoCuentaSupabase): AbonoCuenta {
         observaciones: abono.observaciones || "",
         usuarioNombre: abono.usuario_nombre || "",
     };
-}
-
-function ordenarAbonosAsc(abonos: AbonoCuenta[]) {
-    return [...abonos].sort((a, b) =>
-        `${a.fecha} ${a.hora} ${a.id}`.localeCompare(`${b.fecha} ${b.hora} ${b.id}`)
-    );
 }
 
 export default function ReciboAbonoPage() {
@@ -292,23 +284,7 @@ export default function ReciboAbonoPage() {
             };
         }
 
-        const abonosOrdenados = ordenarAbonosAsc(resultado.abonosCuenta);
-        let abonadoAntes = 0;
-
-        for (const abono of abonosOrdenados) {
-            if (abono.id === resultado.abono.id) break;
-
-            abonadoAntes += numero(abono.monto);
-        }
-
-        const saldoAntes = Math.max(numero(resultado.cuenta.total) - abonadoAntes, 0);
-        const saldoDespues = Math.max(saldoAntes - numero(resultado.abono.monto), 0);
-
-        return {
-            saldoAntes,
-            saldoDespues,
-            abonadoTotal: numero(resultado.cuenta.abonado),
-        };
+        return calcularSaldosAbono(resultado.cuenta, resultado.abono, resultado.abonosCuenta);
     }, [resultado]);
 
     if (cargando) {
@@ -367,6 +343,8 @@ export default function ReciboAbonoPage() {
 
     return (
         <main className="min-h-screen bg-slate-100 px-4 py-5 text-slate-950 print:bg-white print:px-0 print:py-0">
+            {abono.estado === "Anulado" && <div className="mb-4 rounded-xl border border-red-300 bg-red-50 p-4 text-lg font-black text-red-800">ANULADO — Este abono no reduce el saldo pendiente.</div>}
+            <p className="mb-3 text-xs text-slate-500">Saldos referenciales según los abonos actualmente activos.</p>
             <style>{`
                 @media print {
                     @page {

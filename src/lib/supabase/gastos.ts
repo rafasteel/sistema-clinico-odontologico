@@ -1,5 +1,6 @@
 import { crearClienteSupabase } from "@/lib/supabase/client";
 import { obtenerPerfilActual } from "@/lib/supabase/perfil";
+import { ejecutarOperacionClinica } from "@/lib/supabase/operaciones";
 
 export type MetodoGastoSupabase =
     | "Efectivo"
@@ -44,35 +45,6 @@ export type FormularioGastoSupabase = {
     observaciones?: string;
     usuario_nombre?: string;
 };
-
-function texto(valor: unknown) {
-    return String(valor || "").trim();
-}
-
-function numero(valor: unknown) {
-    const convertido = Number(valor || 0);
-
-    if (Number.isNaN(convertido)) return 0;
-
-    return convertido;
-}
-
-function fechaHoyLocal() {
-    const fecha = new Date();
-    const year = fecha.getFullYear();
-    const month = String(fecha.getMonth() + 1).padStart(2, "0");
-    const day = String(fecha.getDate()).padStart(2, "0");
-
-    return `${year}-${month}-${day}`;
-}
-
-function horaActualLocal() {
-    const fecha = new Date();
-    const hours = String(fecha.getHours()).padStart(2, "0");
-    const minutes = String(fecha.getMinutes()).padStart(2, "0");
-
-    return `${hours}:${minutes}`;
-}
 
 function siguienteMes(mes: string) {
     const [year, month] = mes.split("-").map(Number);
@@ -139,115 +111,8 @@ export async function listarGastosPorFechaSupabase(fecha: string) {
     return (data || []) as GastoSupabase[];
 }
 
-export async function crearGastoSupabase(formulario: FormularioGastoSupabase) {
-    const supabase = crearClienteSupabase();
-    const { perfil, clinicaId } = await obtenerContextoClinica();
+export async function crearGastoSupabase(formulario: FormularioGastoSupabase) { return ejecutarOperacionClinica<GastoSupabase>("gasto.crear", formulario); }
 
-    const fecha = texto(formulario.fecha) || fechaHoyLocal();
-    const categoria = texto(formulario.categoria);
-    const descripcion = texto(formulario.descripcion);
-    const monto = numero(formulario.monto);
+export async function actualizarGastoSupabase(id: string, formulario: FormularioGastoSupabase) { return ejecutarOperacionClinica<GastoSupabase>("gasto.actualizar", { ...formulario, id }); }
 
-    if (!categoria) {
-        throw new Error("La categoría del gasto es obligatoria.");
-    }
-
-    if (!descripcion) {
-        throw new Error("La descripción del gasto es obligatoria.");
-    }
-
-    if (monto <= 0) {
-        throw new Error("El monto del gasto debe ser mayor que cero.");
-    }
-
-    const { data, error } = await supabase
-        .from("gastos")
-        .insert({
-            clinica_id: clinicaId,
-
-            fecha,
-            hora: horaActualLocal(),
-
-            categoria,
-            descripcion,
-            monto,
-
-            metodo_pago: formulario.metodo_pago,
-            proveedor: texto(formulario.proveedor),
-
-            usuario_nombre:
-                texto(formulario.usuario_nombre) || perfil.nombre || "Usuario no identificado",
-            observaciones: texto(formulario.observaciones),
-
-            estado: "Activo",
-            creado_por: perfil.id,
-        })
-        .select("*")
-        .single();
-
-    if (error) throw new Error(error.message);
-
-    return data as GastoSupabase;
-}
-
-export async function actualizarGastoSupabase(
-    id: string,
-    formulario: FormularioGastoSupabase
-) {
-    const supabase = crearClienteSupabase();
-    const { clinicaId } = await obtenerContextoClinica();
-
-    const categoria = texto(formulario.categoria);
-    const descripcion = texto(formulario.descripcion);
-    const monto = numero(formulario.monto);
-
-    if (!categoria) {
-        throw new Error("La categoría del gasto es obligatoria.");
-    }
-
-    if (!descripcion) {
-        throw new Error("La descripción del gasto es obligatoria.");
-    }
-
-    if (monto <= 0) {
-        throw new Error("El monto del gasto debe ser mayor que cero.");
-    }
-
-    const { data, error } = await supabase
-        .from("gastos")
-        .update({
-            fecha: texto(formulario.fecha) || fechaHoyLocal(),
-            categoria,
-            descripcion,
-            monto,
-            metodo_pago: formulario.metodo_pago,
-            proveedor: texto(formulario.proveedor),
-            observaciones: texto(formulario.observaciones),
-        })
-        .eq("id", id)
-        .eq("clinica_id", clinicaId)
-        .neq("estado", "Anulado")
-        .select("*")
-        .single();
-
-    if (error) throw new Error(error.message);
-
-    return data as GastoSupabase;
-}
-
-export async function anularGastoSupabase(id: string) {
-    const supabase = crearClienteSupabase();
-    const { clinicaId } = await obtenerContextoClinica();
-
-    const { data, error } = await supabase
-        .from("gastos")
-        .update({ estado: "Anulado" })
-        .eq("id", id)
-        .eq("clinica_id", clinicaId)
-        .select("*")
-        .single();
-
-    if (error) throw new Error(error.message);
-
-    return data as GastoSupabase;
-}
+export async function anularGastoSupabase(id: string) { return ejecutarOperacionClinica<GastoSupabase>("gasto.anular", { id }); }

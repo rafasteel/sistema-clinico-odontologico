@@ -1,5 +1,7 @@
 "use client";
 
+import { resumirVentas, esAbonoVenta } from "@/lib/resumenFinanciero";
+
 import { useEffect, useMemo, useState } from "react";
 import {
     AlertTriangle,
@@ -552,10 +554,7 @@ export default function ExportacionesPage() {
         aplicaPeriodo(cierre.fecha)
     );
 
-    const totalVentas = ventasExportar.reduce(
-        (total, venta) => total + numero(venta.total),
-        0
-    );
+    const totalVentas = resumirVentas(ventasExportar).ventasBrutas;
 
     const efectivo = ventasExportar.reduce(
         (total, venta) => total + numero(venta.efectivo),
@@ -705,7 +704,9 @@ export default function ExportacionesPage() {
                     { encabezado: "Cliente", key: "clienteNombre", ancho: 28 },
                     { encabezado: "Concepto", key: "concepto", ancho: 34 },
                     { encabezado: "Tipo cobro", key: "tipoCobro", ancho: 20 },
-                    { encabezado: "Total", key: "total", ancho: 16, tipo: "moneda", total: true },
+                    { encabezado: "Importe comprobante", key: "total", ancho: 20, tipo: "moneda" },
+                    { encabezado: "Venta nueva", key: "ventaNueva", ancho: 16, tipo: "moneda", total: true },
+                    { encabezado: "Abono cobrado", key: "abonoCobrado", ancho: 16, tipo: "moneda", total: true },
                     { encabezado: "Efectivo", key: "efectivo", ancho: 16, tipo: "moneda", total: true },
                     { encabezado: "Tarjeta", key: "tarjeta", ancho: 16, tipo: "moneda", total: true },
                     { encabezado: "Transferencia", key: "transferencia", ancho: 18, tipo: "moneda", total: true },
@@ -722,6 +723,8 @@ export default function ExportacionesPage() {
                     concepto: venta.concepto,
                     tipoCobro: venta.tipoCobro,
                     total: venta.total || 0,
+                    ventaNueva: esAbonoVenta(venta) ? 0 : venta.total || 0,
+                    abonoCobrado: esAbonoVenta(venta) ? (venta.efectivo || 0) + (venta.tarjeta || 0) + (venta.transferencia || 0) : 0,
                     efectivo: venta.efectivo || 0,
                     tarjeta: venta.tarjeta || 0,
                     transferencia: venta.transferencia || 0,

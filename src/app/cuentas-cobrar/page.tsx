@@ -28,6 +28,7 @@ import {
 import { obtenerConfiguracionClinicaSupabase } from "@/lib/supabase/configuracionClinica";
 import {
     anularCuentaCobrarSupabase,
+    anularAbonoCuentaSupabase,
     listarAbonosCuentaSupabase,
     listarCuentasCobrarSupabase,
     registrarAbonoCuentaSupabase,
@@ -479,6 +480,14 @@ export default function CuentasCobrarPage() {
     async function recalcularEstados() {
         await cargarDatos();
         alert("Estados actualizados desde Supabase correctamente.");
+    }
+
+    async function anularAbono(abono: AbonoCuenta) {
+        if (!window.confirm("¿Anular este abono y devolver su monto al saldo pendiente?")) return;
+        setGuardando(true);
+        try { await anularAbonoCuentaSupabase(abono.id); await cargarDatos(); }
+        catch (errorActual) { alert(errorActual instanceof Error ? errorActual.message : "No se pudo anular el abono."); }
+        finally { setGuardando(false); }
     }
 
     const cuentasNormalizadas = useMemo(() => {
@@ -1085,6 +1094,10 @@ export default function CuentasCobrarPage() {
                                                                         >
                                                                             {abono.metodo}
                                                                         </span>
+                                                                        <span className="text-xs font-bold text-slate-500">{abono.estado}</span>
+                                                                        {abono.estado !== "Anulado" && (
+                                                                            <button type="button" disabled={guardando} onClick={() => anularAbono(abono)} className="rounded-full bg-red-50 px-3 py-1 text-xs font-bold text-red-700 disabled:opacity-50">Anular abono</button>
+                                                                        )}
 
                                                                         <Link
                                                                             href={`/abonos/${abono.id}`}
