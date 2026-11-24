@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { crearClienteSupabaseAdmin } from "@/lib/supabase/serverAdmin";
+import { crearClienteSupabaseAdmin, crearClienteSupabaseSesion } from "@/lib/supabase/serverAdmin";
+import { randomBytes } from "node:crypto";
+
+class ErrorAcceso extends Error {
+    constructor(mensaje: string, public status: number) { super(mensaje); }
+}
 
 type RolUsuarioAdministracion = "ADMIN" | "DOCTOR" | "RECEPCION" | "CAJA";
 type EstadoUsuarioAdministracion = "Activo" | "Inactivo";
@@ -44,19 +49,19 @@ function validarEstado(estado: string): estado is EstadoUsuarioAdministracion {
 }
 
 function generarPasswordTemporal() {
-    return `Temp${Math.floor(100000 + Math.random() * 900000)}`;
+    return randomBytes(18).toString("base64url");
 }
 
 async function obtenerPerfilAdmin(request: NextRequest) {
     const supabase = crearClienteSupabaseAdmin();
     const authorization = request.headers.get("authorization") || "";
-    const token = authorization.replace("Bearer ", "").trim();
+    const token = /^Bearer\s+(\S+)$/i.exec(authorization)?.[1];
 
-    if (!token) throw new Error("No se recibió token de sesión.");
+    if (!token) throw new ErrorAcceso("No se recibió token de sesión.", 401);
 
     const { data: userData, error: userError } = await supabase.auth.getUser(token);
 
-    if (userError || !userData.user) throw new Error("Sesión inválida o vencida.");
+    if (userError || !userData.user) throw new ErrorAcceso("Sesión inválida o vencida.", 401);
 
     const { data: perfil, error: perfilError } = await supabase
         .from("usuarios_perfiles")
@@ -64,9 +69,16 @@ async function obtenerPerfilAdmin(request: NextRequest) {
         .eq("auth_user_id", userData.user.id)
         .maybeSingle();
 
-    if (perfilError || !perfil) throw new Error("No se encontró el perfil del usuario actual.");
-    if (perfil.rol !== "ADMIN") throw new Error("Solo un usuario ADMIN puede administrar usuarios.");
-    if (!perfil.clinica_id) throw new Error("El usuario ADMIN no tiene clínica asignada.");
+    if (perfilError || !perfil) throw new ErrorAcceso("No se encontró el perfil del usuario actual.", 403);
+    if (perfil.rol !== "ADMIN" || perfil.estado !== "Activo") {
+        throw new ErrorAcceso("Solo un usuario ADMIN activo puede administrar usuarios.", 403);
+    }
+    if (!perfil.clinica_id) throw new ErrorAcceso("El usuario ADMIN no tiene clínica asignada.", 403);
+
+    const { data: acceso, error: errorAcceso } = await crearClienteSupabaseSesion(token)
+        .rpc("verificar_acceso_clinica");
+    if (errorAcceso) throw new ErrorAcceso("No se pudo verificar el acceso de la clínica.", 503);
+    if (!acceso?.permitido) throw new ErrorAcceso(acceso?.mensaje || "Acceso de la clínica suspendido.", 403);
 
     return {
         supabase,
@@ -153,7 +165,7 @@ async function registrarAuditoria({
 }) {
     const supabase = crearClienteSupabaseAdmin();
 
-    await supabase.from("auditoria").insert({
+    const { error } = await supabase.from("auditoria").insert({
         clinica_id: clinicaId,
         usuario_perfil_id: perfilAdmin.id,
         usuario_nombre: perfilAdmin.nombre || "Administrador",
@@ -167,6 +179,7 @@ async function registrarAuditoria({
         monto: 0,
         metadata: {},
     });
+    if (error) throw new Error(`No se pudo registrar la auditoría: ${error.message}`);
 }
 
 function obtenerDatosUsuario(body: Record<string, unknown>, requierePassword: boolean) {
@@ -215,8 +228,6 @@ export async function POST(request: NextRequest) {
                     user_metadata: {
                         nombre: datos.nombre,
                         usuario: datos.usuario,
-                        rol: datos.rol,
-                        clinica_id: clinicaId,
                     },
                 });
 
@@ -262,6 +273,10 @@ export async function POST(request: NextRequest) {
             const perfilObjetivo = await obtenerPerfilObjetivo(clinicaId, id);
             const datos = obtenerDatosUsuario(body, false);
 
+            if (perfilObjetivo.id === perfil.id && (datos.estado !== "Activo" || datos.rol !== "ADMIN")) {
+                throw new Error("No podés desactivar ni cambiar el rol de tu propio usuario.");
+            }
+
             await verificarDuplicados({
                 clinicaId,
                 usuario: datos.usuario,
@@ -279,9 +294,6 @@ export async function POST(request: NextRequest) {
                     user_metadata: {
                         nombre: datos.nombre,
                         usuario: datos.usuario,
-                        rol: datos.rol,
-                        clinica_id: clinicaId,
-                        estado: datos.estado,
                     },
                 };
 
@@ -382,9 +394,6 @@ export async function POST(request: NextRequest) {
                     user_metadata: {
                         nombre: perfilObjetivo.nombre,
                         usuario: perfilObjetivo.usuario,
-                        rol: perfilObjetivo.rol,
-                        clinica_id: clinicaId,
-                        estado: perfilObjetivo.estado,
                     },
                 }
             );
@@ -410,6 +419,6 @@ export async function POST(request: NextRequest) {
                 ? errorActual.message
                 : "No se pudo procesar la administración de usuarios.";
 
-        return respuestaError(mensaje, 400);
+        return respuestaError(mensaje, errorActual instanceof ErrorAcceso ? errorActual.status : 400);
     }
 }

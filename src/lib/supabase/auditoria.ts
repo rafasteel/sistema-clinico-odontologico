@@ -62,14 +62,6 @@ function fechaHoyLocal() {
     return `${year}-${month}-${day}`;
 }
 
-function horaActualLocal() {
-    const fecha = new Date();
-    const hours = String(fecha.getHours()).padStart(2, "0");
-    const minutes = String(fecha.getMinutes()).padStart(2, "0");
-
-    return `${hours}:${minutes}`;
-}
-
 function texto(valor: unknown, respaldo = "") {
     const convertido = String(valor ?? "").trim();
 
@@ -661,7 +653,7 @@ export async function registrarEventoAuditoriaSupabase(
     formulario: FormularioAuditoriaSupabase
 ) {
     const supabase = crearClienteSupabase();
-    const { perfil, clinicaId } = await obtenerContextoClinica();
+    const { clinicaId } = await obtenerContextoClinica();
 
     if (!clinicaId) return null;
 
@@ -669,9 +661,6 @@ export async function registrarEventoAuditoriaSupabase(
         .from("auditoria")
         .insert({
             clinica_id: clinicaId,
-            usuario_perfil_id: perfil.id,
-            usuario_nombre: texto(perfil.nombre, "Usuario no identificado"),
-            rol_usuario: texto(perfil.rol),
             modulo: formulario.modulo,
             accion: texto(formulario.accion),
             detalle: texto(formulario.detalle),
